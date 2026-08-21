@@ -17,7 +17,7 @@ npm install @arcus-xyz/arcus-spot-sdk viem
 
 ## Hosted routers
 
-Public router deployments are available — no local setup or API key is needed to fetch quotes:
+Public router deployments are available — no local setup is needed to fetch quotes:
 
 | Environment       | Base URL                                   | Chain ID | Venues              |
 | ----------------- | ------------------------------------------ | -------- | ------------------- |
@@ -25,6 +25,23 @@ Public router deployments are available — no local setup or API key is needed 
 | Robinhood testnet | `https://router.spot.testnet.arcus.xyz/v1` | 46630    | arcus               |
 
 Verify either with the unversioned health endpoint, e.g. `curl https://router.spot.arcus.xyz/health` → `{"ok":true,"chainId":4663,...}`. Self-hosted routers (e.g. `http://localhost:8787/v1`) work the same way — every example below accepts either base URL.
+
+## Authentication
+
+The router gates its endpoints with an API key. Pass the key issued for your
+integration and the client sends it as `X-Api-Key` on every request:
+
+```ts
+const client = new SpotRouterClient({
+  baseUrl: "https://router.spot.arcus.xyz/v1",
+  apiKey: "arc_…",
+});
+```
+
+Keys shipped in a browser or mobile bundle are publishable identifiers rather
+than secrets — the server hardens browser keys by pinning them to specific
+origins, so use a separate key per client. `apiKey` is optional and can be
+omitted against a router that is not enforcing keys.
 
 ## Usage
 

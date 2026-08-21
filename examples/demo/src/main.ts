@@ -148,18 +148,23 @@ app.innerHTML = `
             <div class="field">
               <label for="baseUrlPreset">router base URL</label>
               <select id="baseUrlPreset">
+                <option value="${ROUTER_BASE_URLS.rhMainnet}">${ROUTER_BASE_URLS.rhMainnet}</option>
                 <option value="${ROUTER_BASE_URLS.testnet}">${ROUTER_BASE_URLS.testnet}</option>
                 <option value="${ROUTER_BASE_URLS.arbitrum}">${ROUTER_BASE_URLS.arbitrum}</option>
-                <option value="${ROUTER_BASE_URLS.rhMainnet}">${ROUTER_BASE_URLS.rhMainnet}</option>
                 <option value="${ROUTER_BASE_URLS.local}">${ROUTER_BASE_URLS.local}</option>
                 <option value="${ROUTER_BASE_URLS.custom}">custom</option>
               </select>
               <input id="baseUrl" class="hidden" placeholder="https://router.example.com/v1" />
             </div>
+            <div class="field">
+              <label for="apiKey">API key (optional)</label>
+              <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="arc_…" />
+              <p class="note">Sent as X-Api-Key on every request. Leave empty to call without a key (monitor mode logs anonymous callers).</p>
+            </div>
             <div class="pair">
               <div class="field">
                 <label for="chainId">chain ID</label>
-                <input id="chainId" value="${ROBINHOOD_TESTNET_CHAIN_ID}" />
+                <input id="chainId" value="${ROBINHOOD_MAINNET_CHAIN_ID}" />
               </div>
             </div>
             <div class="field">
@@ -338,6 +343,7 @@ app.innerHTML = `
 
 const els = {
   account: must<HTMLElement>("account"),
+  apiKey: must<HTMLInputElement>("apiKey"),
   baseUrl: must<HTMLInputElement>("baseUrl"),
   baseUrlPreset: must<HTMLSelectElement>("baseUrlPreset"),
   buyPreset: must<HTMLSelectElement>("buyPreset"),
@@ -419,7 +425,12 @@ document.querySelectorAll<HTMLButtonElement>("[data-copy-target]").forEach((butt
 });
 
 function client(): SpotRouterClient {
-  return new SpotRouterClient({ baseUrl: routerBaseUrl(), timeoutMs: 90_000 });
+  const apiKey = els.apiKey.value.trim();
+  return new SpotRouterClient({
+    baseUrl: routerBaseUrl(),
+    timeoutMs: 90_000,
+    ...(apiKey ? { apiKey } : {}),
+  });
 }
 
 function routerBaseUrl(): string {

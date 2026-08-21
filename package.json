@@ -1,6 +1,6 @@
 {
   "name": "@arcus-xyz/arcus-spot-sdk",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "TypeScript SDK for the Arcus spot router server.",
   "license": "Apache-2.0",
   "type": "module",

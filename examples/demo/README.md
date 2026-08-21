@@ -11,3 +11,5 @@ Minimal local browser console for exercising `@arcus-xyz/arcus-spot-sdk` against
 The hosted router presets (RH mainnet, testnet, Arbitrum) need no setup. To use the **local** preset instead, start a `v5-spot-router` with `ZEROX_API_KEY`, `RELAYER_PRIVATE_KEY`, and `RPC_URL`.
 
 The router base-URL preset drives the selected chain: the Arbitrum preset selects `42161` (0x), the RH mainnet preset `4663` (Arcus/Rialto/LI.FI), and the testnet/local presets Robinhood testnet `46630` (Arcus). Changing the chain ID re-syncs the SwapShell address and the token presets, defaulting the pair to **USDC → WETH** (Arbitrum), **USDG → WEEK** (RH mainnet `4663`), or **mUSDG → mTSLA** (RH testnet `46630`). The token dropdowns show only tokens for the selected chain and merge `/tokens` from the versioned base URL when available.
+
+Dev Settings includes an optional API key field. When set, the client sends it as `X-Api-Key` on every request (health, tokens, price, quote, submit, status). Leave it empty to call without a key. In `API_KEY_MODE=monitor` the router still serves the request and logs whether the key would have been accepted.

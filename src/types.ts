@@ -13,6 +13,13 @@ export type ClientOptions = {
   baseUrl: string;
   fetch?: typeof fetch;
   timeoutMs?: number;
+  /**
+   * Router API key, sent as `X-Api-Key` on every request. Issued per client;
+   * keys used from a browser or mobile bundle are publishable identifiers
+   * rather than secrets, and are hardened by per-key origin pinning on the
+   * server. Omit it against a router that is not enforcing keys.
+   */
+  apiKey?: string;
 };
 
 export type PriceRequest = {

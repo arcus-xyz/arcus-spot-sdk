@@ -23,11 +23,16 @@ export class SpotRouterError extends Error {
   }
 }
 
+// Narrower than RequestInit so headers stay a plain record the client can merge
+// the API key into.
+type JsonRequestInit = Omit<RequestInit, "headers"> & { headers?: Record<string, string> };
+
 export class SpotRouterClient {
   readonly baseUrl: string;
   private readonly apiBaseUrl: string;
   private readonly fetchFn: typeof fetch;
   private readonly timeoutMs: number;
+  private readonly apiKey: string | undefined;
 
   constructor(options: ClientOptions) {
     this.baseUrl = withoutApiVersion(options.baseUrl.replace(/\/+$/, ""));
@@ -35,6 +40,7 @@ export class SpotRouterClient {
     const defaultFetch = globalThis.fetch?.bind(globalThis);
     this.fetchFn = options.fetch ?? defaultFetch;
     this.timeoutMs = options.timeoutMs ?? 15_000;
+    this.apiKey = options.apiKey;
 
     if (!this.fetchFn) {
       throw new SpotRouterError("No fetch implementation available");
@@ -109,7 +115,7 @@ export class SpotRouterClient {
 
   private async requestJson<T>(
     pathOrUrl: string | URL,
-    init: RequestInit,
+    init: JsonRequestInit,
     baseUrl: string,
   ): Promise<T> {
     const controller = new AbortController();
@@ -121,6 +127,10 @@ export class SpotRouterClient {
     try {
       response = await this.fetchFn(url, {
         ...init,
+        headers: {
+          ...init.headers,
+          ...(this.apiKey ? { "X-Api-Key": this.apiKey } : {}),
+        },
         signal: controller.signal,
       });
     } catch (error) {
