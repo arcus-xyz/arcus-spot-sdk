@@ -163,8 +163,10 @@ func GetQuoteSigningTasks(quote FirmQuote) []QuoteSigningTask {
 // SignQuoteOptions tunes SignQuote.
 type SignQuoteOptions struct {
 	// Taker overrides the taker address; defaults to the taker bound in the
-	// quote's witness, then the signer address.
+	// quote's witness, then the signer address. For quotes that bind a taker or
+	// owner in signed typed data, an override must match that bound address.
 	Taker common.Address
+
 	// Permits optionally folds EIP-2612 permits into the submit body for a
 	// first-time sellToken→Permit2 allowance.
 	Permits []Permit
@@ -177,13 +179,19 @@ func SignQuote(quote FirmQuote, signer TypedDataSigner, options *SignQuoteOption
 		options = &SignQuoteOptions{}
 	}
 
+	boundTaker := inferTaker(quote)
+	if options.Taker != (common.Address{}) && boundTaker != (common.Address{}) && options.Taker != boundTaker {
+		return nil, fmt.Errorf("arcusspot: taker override %s does not match the address bound in the signed quote %s", options.Taker, boundTaker)
+	}
+
 	taker := options.Taker
 	if taker == (common.Address{}) {
-		taker = inferTaker(quote)
+		taker = boundTaker
 	}
 	if taker == (common.Address{}) {
 		taker = signer.Address()
 	}
+
 	if taker == (common.Address{}) {
 		return nil, errors.New("arcusspot: unable to infer taker address; set SignQuoteOptions.Taker")
 	}

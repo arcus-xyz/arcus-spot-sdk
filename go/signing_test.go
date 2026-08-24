@@ -212,7 +212,18 @@ func TestSignQuoteInfersArcusTaker(t *testing.T) {
 	}
 }
 
+func TestSignQuoteRejectsMismatchedArcusTaker(t *testing.T) {
+	signer := testSigner(t)
+	quote := arcusQuoteForPermitTest(signer.Address())
+	mismatched := common.HexToAddress("0x0000000000000000000000000000000000000001")
+
+	if _, err := SignQuote(quote, signer, &SignQuoteOptions{Taker: mismatched}); err == nil {
+		t.Fatal("expected a mismatched taker override to be rejected")
+	}
+}
+
 func TestSignQuoteRejectsBebop(t *testing.T) {
+
 	signer := testSigner(t)
 	if _, err := SignQuote(&BebopFirmQuote{Venue: VenueBebop}, signer, nil); err == nil {
 		t.Fatal("expected error for bebop venue")
