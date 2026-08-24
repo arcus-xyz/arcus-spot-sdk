@@ -17,7 +17,48 @@ describe("splitSignature", () => {
   });
 });
 
+describe("signQuote taker binding", () => {
+  const account = privateKeyToAccount(
+    "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+  );
+  const walletClient = createWalletClient({
+    account,
+    chain: arbitrum,
+    transport: http("https://arb1.arbitrum.io/rpc"),
+  });
+  const quote = {
+    venue: "arcus",
+    buyAmount: "1",
+    sellAmount: "1",
+    fees: [],
+    expiry: 1,
+    toSign: {
+      domain: {
+        name: "Permit2",
+        chainId: 46630,
+        verifyingContract: "0x000000000022d473030f116ddee9f6b43ac78ba3",
+      },
+      types: {
+        PermitWitnessTransferFrom: [{ name: "witness", type: "TakerIntent" }],
+        TakerIntent: [{ name: "taker", type: "address" }],
+      },
+      primaryType: "PermitWitnessTransferFrom",
+      message: { witness: { taker: account.address } },
+    },
+    arcus: { minAmountOut: "1" },
+  } as const;
+
+  test("rejects a taker override that differs from the signed witness", async () => {
+    await expect(
+      signQuote(quote, walletClient, {
+        taker: "0x0000000000000000000000000000000000000001",
+      }),
+    ).rejects.toThrow("does not match the address bound in the signed quote");
+  });
+});
+
 describe("signQuote (lifi)", () => {
+
   const account = privateKeyToAccount(
     "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
   );
