@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum"
@@ -161,8 +162,37 @@ func TestBuildPermitUnsupportedToken(t *testing.T) {
 	}
 }
 
-// Transport failures must rethrow instead of downgrading to the approve flow.
+// Transport failures from version() must propagate instead of producing a permit with
+// an unverified domain version.
+func TestBuildPermitReThrowsVersionTransportErrors(t *testing.T) {
+	signer := testSigner(t)
+	caller := &fakeCaller{
+		allowance:  big.NewInt(0),
+		nonce:      big.NewInt(0),
+		name:       "Mock USD",
+		versionErr: errors.New("429 Too Many Requests"),
+	}
+
+	_, err := BuildArcusSellTokenPermitIfNeeded(context.Background(), arcusQuoteForPermitTest(signer.Address()), BuildPermitOptions{
+		Caller:   caller,
+		Signer:   signer,
+		Deadline: big.NewInt(9999999999),
+	})
+	if err == nil {
+		t.Fatal("expected version transport error to propagate")
+	}
+	var unsupported *PermitUnsupportedError
+	if errors.As(err, &unsupported) {
+		t.Fatalf("version transport error must not become PermitUnsupportedError: %v", err)
+	}
+	if !strings.Contains(err.Error(), "429 Too Many Requests") {
+		t.Fatalf("expected rate-limit context, got %v", err)
+	}
+}
+
+// Transport failures in nonces() must rethrow instead of downgrading to the approve flow.
 func TestBuildPermitReThrowsTransportErrors(t *testing.T) {
+
 	signer := testSigner(t)
 	caller := &fakeCaller{
 		allowance: big.NewInt(0),

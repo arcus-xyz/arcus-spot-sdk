@@ -229,7 +229,10 @@ func buildSellTokenPermitIfNeeded(ctx context.Context, core sellTokenPermitCore)
 	if err != nil {
 		return nil, err
 	}
-	version := readEip2612Version(ctx, caller, core.Token)
+	version, err := readEip2612Version(ctx, caller, core.Token)
+	if err != nil {
+		return nil, err
+	}
 
 	typedData := Eip712TypedData{
 		Domain: TypedDataDomain{
@@ -277,15 +280,19 @@ func buildSellTokenPermitIfNeeded(ctx context.Context, core sellTokenPermitCore)
 }
 
 // readEip2612Version reads the token's EIP-2612 domain version when exposed,
-// falling back to "1". Some EIP-2612 tokens (e.g. USDC on Arbitrum) use a
-// domain version other than "1"; signing with the wrong version yields a permit
-// that reverts on-chain.
-func readEip2612Version(ctx context.Context, caller ContractCaller, token common.Address) string {
+// falling back to "1" only when the call proves that the function is absent or
+// reverted. Some EIP-2612 tokens (e.g. USDC on Arbitrum) use a domain version
+// other than "1"; signing with the wrong version yields a permit that reverts
+// on-chain. Transport failures must surface to the caller.
+func readEip2612Version(ctx context.Context, caller ContractCaller, token common.Address) (string, error) {
 	version, err := readString(ctx, caller, token, "version")
 	if err != nil {
-		return "1"
+		if isMissingPermitFunction(err) {
+			return "1", nil
+		}
+		return "", err
 	}
-	return version
+	return version, nil
 }
 
 func callMethod(ctx context.Context, caller ContractCaller, token common.Address, method string, args ...any) ([]any, error) {
