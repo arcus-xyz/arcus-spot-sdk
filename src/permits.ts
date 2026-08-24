@@ -189,7 +189,8 @@ export async function buildArcusSellTokenPermitIfNeeded(
 
 // Some EIP-2612 tokens (e.g. USDC on Arbitrum) use a domain version other than
 // "1"; signing with the wrong version yields a permit that reverts on-chain. Read
-// `version()` when the token exposes it, falling back to "1".
+// `version()` when the token exposes it, falling back to "1" only when the call
+// proves that the function is absent or reverted. Transport failures must surface.
 const versionAbi = [
   {
     type: "function",
@@ -207,8 +208,9 @@ async function readEip2612Version(publicClient: PublicClient, token: Address): P
       abi: versionAbi,
       functionName: "version",
     });
-  } catch {
-    return "1";
+  } catch (error) {
+    if (isMissingPermitFunction(error)) return "1";
+    throw error;
   }
 }
 

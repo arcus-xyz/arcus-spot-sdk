@@ -857,16 +857,14 @@ function renderTokenOptions(): void {
       : state.tokens.filter((token) => token.chainId === selectedChainId);
   const tokens = chainTokens.length > 0 ? chainTokens : state.tokens;
 
-  const options = tokens
-    .map(
-      (token) =>
-        `<option value="${token.address}">${token.symbol} / ${token.name} / ${shorten(
-          token.address,
-        )} / ${token.decimals} / ${token.source}</option>`,
-    )
-    .join("");
-  els.sellPreset.innerHTML = options;
-  els.buyPreset.innerHTML = options;
+  const optionNodes = tokens.map((token) => {
+    const option = document.createElement("option");
+    option.value = token.address;
+    option.textContent = `${token.symbol} / ${token.name} / ${shorten(token.address)} / ${token.decimals} / ${token.source}`;
+    return option;
+  });
+  els.sellPreset.replaceChildren(...optionNodes.map((option) => option.cloneNode(true)));
+  els.buyPreset.replaceChildren(...optionNodes);
 
   const defaults = selectedChainId == null ? undefined : DEFAULT_PAIR_BY_CHAIN_ID[selectedChainId];
   selectBySymbol(els.sellPreset, defaults?.sell ?? tokens[0]?.symbol);
@@ -896,24 +894,31 @@ function applyPreset(side: "sell" | "buy"): void {
 function renderQuoteOptions(): void {
   const response = state.quoteResponse;
   if (!response || response.all.length === 0) {
-    els.quoteSelect.innerHTML = `<option value="">fetch quotes first</option>`;
+
+    const emptyOption = document.createElement("option");
+    emptyOption.value = "";
+    emptyOption.textContent = "fetch quotes first";
+    els.quoteSelect.replaceChildren(emptyOption);
     els.quoteSelect.disabled = true;
     return;
   }
 
-  els.quoteSelect.innerHTML = response.all
-    .map((quote, index) => {
-      const summary = quoteSummary(quote);
-      const forced = els.preferredVenue.value.trim();
-      const marker =
-        quote.venue === forced
-          ? "forced"
-          : quote.venue === response.recommended
-            ? "recommended"
-            : "available";
-      return `<option value="${index}">${quote.venue} / ${summary.buyAmount} / ${marker}</option>`;
-    })
-    .join("");
+  const quoteOptions = response.all.map((quote, index) => {
+    const summary = quoteSummary(quote);
+    const forced = els.preferredVenue.value.trim();
+    const marker =
+      quote.venue === forced
+        ? "forced"
+        : quote.venue === response.recommended
+          ? "recommended"
+          : "available";
+    const option = document.createElement("option");
+    option.value = String(index);
+    option.textContent = `${quote.venue} / ${summary.buyAmount} / ${marker}`;
+    return option;
+  });
+  els.quoteSelect.replaceChildren(...quoteOptions);
+
   const selectedIndex = response.all.findIndex((quote) => quote === state.selectedQuote);
   els.quoteSelect.value = String(selectedIndex >= 0 ? selectedIndex : 0);
   els.quoteSelect.disabled = false;

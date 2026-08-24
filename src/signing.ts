@@ -20,7 +20,12 @@ export type QuoteSigningTask = {
 };
 
 export type SignQuoteOptions = {
+  /**
+   * Optional taker override. When the quote binds a taker/owner in its signed
+   * typed data, this value must match that address.
+   */
   taker?: Hex;
+
   account?: Account | Hex;
   /**
    * Optional EIP-2612 permits to fold into SwapShell.permits[] (arcus). Use when
@@ -39,7 +44,14 @@ export async function signQuote(
   walletClient: WalletClient,
   options: SignQuoteOptions = {},
 ): Promise<SignedQuote> {
-  const taker = options.taker ?? inferTaker(quote) ?? walletClient.account?.address;
+  const boundTaker = inferTaker(quote);
+  if (options.taker && boundTaker && !sameAddress(options.taker, boundTaker)) {
+    throw new Error(
+      `Taker override ${options.taker} does not match the address bound in the signed quote ${boundTaker}`,
+    );
+  }
+
+  const taker = options.taker ?? boundTaker ?? walletClient.account?.address;
   if (!taker) {
     throw new Error("Unable to infer taker address; pass signQuote(..., { taker })");
   }
@@ -211,4 +223,8 @@ function nestedValue(source: Record<string, unknown>, path: string[]): unknown {
 
 function isHexAddress(value: unknown): value is Hex {
   return typeof value === "string" && /^0x[0-9a-fA-F]{40}$/.test(value);
+}
+
+function sameAddress(left: Hex, right: Hex): boolean {
+  return left.toLowerCase() === right.toLowerCase();
 }

@@ -21,12 +21,15 @@ function lifiQuote(): LifiFirmQuote {
 
 // A publicClient stub: allowance is below sellAmount (so a permit is needed),
 // and the nonces() read throws `noncesError`.
-function stubClient(noncesError: unknown) {
+function stubClient(noncesError?: unknown, versionError?: unknown) {
   return {
     readContract: async ({ functionName }: { functionName: string }) => {
       if (functionName === "allowance") return 0n;
-      if (functionName === "nonces") throw noncesError;
+      if (functionName === "nonces" && noncesError !== undefined) throw noncesError;
+      if (functionName === "nonces") return 0n;
       if (functionName === "name") return "The Juggernaut";
+      if (functionName === "version" && versionError !== undefined) throw versionError;
+      if (functionName === "version") return "1";
       throw new Error(`unexpected read: ${functionName}`);
     },
   } as never;
@@ -68,11 +71,23 @@ describe("buildLifiSellTokenPermitIfNeeded — non-EIP-2612 detection", () => {
     ).rejects.toBeInstanceOf(PermitUnsupportedError);
   });
 
-  test("rethrows the raw error for transient transport failures (429)", async () => {
+  test("rethrows the raw error for transient nonces() transport failures (429)", async () => {
     const walletClient = {} as never;
     const promise = buildLifiSellTokenPermitIfNeeded({
       quote: lifiQuote(),
       publicClient: stubClient(rateLimitError()),
+      walletClient,
+      taker: TAKER,
+    });
+    await expect(promise).rejects.not.toBeInstanceOf(PermitUnsupportedError);
+    await expect(promise).rejects.toBeInstanceOf(BaseError);
+  });
+
+  test("rethrows the raw error for transient version() transport failures (429)", async () => {
+    const walletClient = {} as never;
+    const promise = buildLifiSellTokenPermitIfNeeded({
+      quote: lifiQuote(),
+      publicClient: stubClient(undefined, rateLimitError()),
       walletClient,
       taker: TAKER,
     });
