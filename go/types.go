@@ -190,6 +190,8 @@ type RouteFee struct {
 	Token     common.Address `json:"token"`
 	Type      string         `json:"type"`
 	AmountUSD float64        `json:"amountUsd,omitempty"`
+	// Bps is the human basis-point rate when the venue reports one (tenths ok).
+	Bps float64 `json:"bps,omitempty"`
 }
 
 // TakerIntent is the Arcus RFQ order witness. Public HTTP numeric fields are
@@ -224,6 +226,7 @@ type FirmQuote interface {
 }
 
 // ArcusFirmQuote is a firm quote from the Arcus RFQ venue.
+// BuyAmount and Arcus.MinAmountOut are post-fee (net). Fees is a breakdown only.
 type ArcusFirmQuote struct {
 	Venue      Venue           `json:"venue"` // always "arcus"
 	BuyAmount  string          `json:"buyAmount"`
@@ -232,6 +235,8 @@ type ArcusFirmQuote struct {
 	Expiry     int64           `json:"expiry"`
 	ToSign     Eip712TypedData `json:"toSign"`
 	Arcus      struct {
+		// MinAmountOut is the signed delivery floor. Net of buy-token fees;
+		// unchanged when the fee is taken from the sell token.
 		MinAmountOut string `json:"minAmountOut"`
 	} `json:"arcus"`
 }

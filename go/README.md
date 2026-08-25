@@ -156,6 +156,9 @@ gas-costing tx. The rialto and lifi builders (`BuildRialtoSellTokenPermitIfNeede
 `BuildLifiSellTokenPermitIfNeeded`) share the same behavior; the lifi builder
 requires `Options.Owner` because its witness does not carry the taker.
 
+Arcus `BuyAmount` and `Arcus.MinAmountOut` are already net of protocol and
+builder fees — do not subtract `Fees` again.
+
 ### Chain deployments and token list
 
 ```go

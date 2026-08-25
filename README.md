@@ -100,7 +100,7 @@ if (submitResponse.venue === "arcus") {
 
 The SDK accepts the versioned API base URL, for example `http://localhost:8787/v1`, and calls endpoints like `/quote`, `/price`, `/submit`, `/status`, and `/tokens` relative to it. `health()` remains unversioned at `/health`.
 
-Every firm quote includes `fees`, a normalized route-fee array with `amount` in atoms and `token` as the fee token address. Venues with no reported fee return an empty array; Bebop gas/native fees may include `amountUsd` to show the USD value of the fees.
+Every firm quote includes `fees`, a normalized route-fee array with `amount` in atoms and `token` as the fee token address. Venues with no reported fee return an empty array; Bebop gas/native fees may include `amountUsd` to show the USD value of the fees. Arcus `buyAmount` and `arcus.minAmountOut` are already net of protocol and builder fees — do not subtract `fees` again.
 
 Example `quote.fees` from a firm quote:
 
