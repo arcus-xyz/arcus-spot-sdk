@@ -167,6 +167,29 @@ func BuildLifiSellTokenPermitIfNeeded(ctx context.Context, quote *LifiFirmQuote,
 	})
 }
 
+// BuildBebopSellTokenPermitIfNeeded builds an EIP-2612 permit for the Bebop
+// sellToken→Permit2 allowance when needed. The token owner defaults to the
+// tokensOwner bound in the Bebop order witness.
+func BuildBebopSellTokenPermitIfNeeded(ctx context.Context, quote *BebopFirmQuote, options BuildPermitOptions) (*Permit, error) {
+	message := quote.ToSign.Message
+	token := addressAtPath(message, "permitted", "token")
+	owner := options.Owner
+	if owner == (common.Address{}) {
+		owner = addressAtPath(message, "witness", "tokensOwner")
+	}
+	amount := bigIntAtPath(message, "permitted", "amount")
+	if token == (common.Address{}) || owner == (common.Address{}) || amount == nil {
+		return nil, errors.New("arcusspot: bebop permit: quote.ToSign.Message missing permitted/owner")
+	}
+	return buildSellTokenPermitIfNeeded(ctx, sellTokenPermitCore{
+		Token:      token,
+		Owner:      owner,
+		SellAmount: amount,
+		TypedData:  &quote.ToSign,
+		Options:    options,
+	})
+}
+
 type sellTokenPermitCore struct {
 	Token      common.Address
 	Owner      common.Address

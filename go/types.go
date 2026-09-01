@@ -18,8 +18,7 @@ import (
 // Venue identifies a routing venue in router responses.
 type Venue string
 
-// SupportedVenue values are the venues signQuote/submit support; "bebop" only
-// appears in price/quote responses.
+// SupportedVenue values are the venues SignQuote/submit support.
 const (
 	VenueArcus  Venue = "arcus"
 	VenueRialto Venue = "rialto"
@@ -309,17 +308,27 @@ func (q *LifiFirmQuote) FirmQuoteVenue() Venue { return VenueLifi }
 // TradeTypedData implements FirmQuote.
 func (q *LifiFirmQuote) TradeTypedData() *Eip712TypedData { return &q.ToSign }
 
-// BebopFirmQuote is a firm quote from the Bebop venue. SignQuote does not
-// support bebop; the type exists so quote responses parse losslessly.
+// BebopTx is the prepared Bebop settlement transaction echoed back on submit;
+// the router inserts the taker's Permit2 signature into Data.
+type BebopTx struct {
+	To            common.Address `json:"to"`
+	Data          hexutil.Bytes  `json:"data"`
+	Value         string         `json:"value"`
+	OriginAddress common.Address `json:"originAddress"`
+}
+
+// BebopFirmQuote is a firm quote from the Bebop venue.
 type BebopFirmQuote struct {
-	Venue      Venue           `json:"venue"` // always "bebop"
-	BuyAmount  string          `json:"buyAmount"`
-	SellAmount string          `json:"sellAmount"`
-	Fees       []RouteFee      `json:"fees"`
-	QuoteID    string          `json:"quoteId"`
-	Expiry     int64           `json:"expiry"`
-	ToSign     Eip712TypedData `json:"toSign"`
-	Raw        json.RawMessage `json:"raw"`
+	Venue        Venue           `json:"venue"` // always "bebop"
+	BuyAmount    string          `json:"buyAmount"`
+	SellAmount   string          `json:"sellAmount"`
+	MinBuyAmount string          `json:"minBuyAmount"`
+	Fees         []RouteFee      `json:"fees"`
+	QuoteID      string          `json:"quoteId"`
+	Expiry       int64           `json:"expiry"`
+	ToSign       Eip712TypedData `json:"toSign"`
+	Tx           BebopTx         `json:"tx"`
+	Raw          json.RawMessage `json:"raw"`
 }
 
 // FirmQuoteVenue implements FirmQuote.
@@ -476,8 +485,25 @@ type LifiSignedQuote struct {
 // SignedQuoteVenue implements SignedQuote.
 func (q *LifiSignedQuote) SignedQuoteVenue() Venue { return VenueLifi }
 
+// BebopSignedQuote is the submit body for the bebop venue. The router inserts
+// Signature into the prepared settle calldata and relays it through SwapShell.
+type BebopSignedQuote struct {
+	Venue     Venue           `json:"venue"` // always "bebop"
+	ChainID   uint64          `json:"chainId"`
+	Taker     common.Address  `json:"taker"`
+	TypedData Eip712TypedData `json:"typedData"`
+	Signature hexutil.Bytes   `json:"signature"`
+	Tx        BebopTx         `json:"tx"`
+	Permits   []Permit        `json:"permits,omitempty"`
+	RouteTag  string          `json:"routeTag,omitempty"`
+}
+
+// SignedQuoteVenue implements SignedQuote.
+func (q *BebopSignedQuote) SignedQuoteVenue() Venue { return VenueBebop }
+
 // SubmitResponse is the body of POST /v1/submit. Maker, Wrapped, SettledToken,
-// and OrderID are only populated for the arcus venue.
+// and OrderID are only populated for the arcus venue. Bebop, rialto, and lifi
+// responses use the common Venue/TxHash/Status fields.
 type SubmitResponse struct {
 	Venue        Venue           `json:"venue"`
 	TxHash       common.Hash     `json:"txHash"`
@@ -502,7 +528,7 @@ const (
 
 // StatusRequest is the query for GET /v1/status.
 type StatusRequest struct {
-	Venue   Venue  // one of the supported venues (arcus | rialto | lifi)
+	Venue   Venue  // one of the supported venues (bebop | arcus | rialto | lifi)
 	ID      string // tx hash or order id, 0x-prefixed
 	ChainID uint64 // optional; 0 omits the parameter
 }

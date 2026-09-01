@@ -13,6 +13,7 @@ import { PERMIT2_ADDRESS } from "./constants.js";
 import { signTypedDataWithViem, splitSignature } from "./signing.js";
 import type {
   ArcusFirmQuote,
+  BebopFirmQuote,
   Eip712TypedData,
   LifiFirmQuote,
   Permit,
@@ -226,7 +227,7 @@ type SellTokenPermitCore = {
   deadline?: bigint | undefined;
 };
 
-// Shared core for arcus + rialto: builds and signs the EIP-2612 sellToken→Permit2
+// Shared venue core: builds and signs the EIP-2612 sellToken→Permit2
 // permit, but only when the taker's Permit2 allowance doesn't already cover
 // `sellAmount` (returns undefined otherwise — no signature prompt)
 async function buildSellTokenPermitIfNeeded(
@@ -352,6 +353,47 @@ export async function buildLifiSellTokenPermitIfNeeded(
   const owner = options.taker as Address | undefined;
   if (!token || !owner || message.permitted?.amount == null) {
     throw new Error("lifi permit: quote.toSign.message missing permitted token/amount or taker");
+  }
+  return buildSellTokenPermitIfNeeded({
+    token,
+    owner,
+    sellAmount: BigInt(message.permitted.amount),
+    chainId: Number(options.quote.toSign.domain.chainId),
+    publicClient: options.publicClient,
+    walletClient: options.walletClient,
+    account: options.account,
+    value: options.value,
+    deadline: options.deadline,
+  });
+}
+
+export type BuildBebopPermitOptions = {
+  quote: BebopFirmQuote;
+  publicClient: PublicClient;
+  walletClient: WalletClient;
+  /** Token owner; defaults to the tokensOwner bound in the Bebop order witness. */
+  taker?: Hex;
+  account?: Account | Hex;
+  value?: bigint;
+  deadline?: bigint;
+};
+
+/**
+ * Build an EIP-2612 permit for the Bebop sellToken→Permit2 allowance when
+ * needed. The returned permit can be passed to signQuote via `permits` so the
+ * router applies a first-time allowance in the same SwapShell transaction.
+ */
+export async function buildBebopSellTokenPermitIfNeeded(
+  options: BuildBebopPermitOptions,
+): Promise<Permit | undefined> {
+  const message = options.quote.toSign.message as {
+    permitted?: { token?: string; amount?: string };
+    witness?: { tokensOwner?: string };
+  };
+  const token = message.permitted?.token as Address | undefined;
+  const owner = (options.taker ?? message.witness?.tokensOwner) as Address | undefined;
+  if (!token || !owner || message.permitted?.amount == null) {
+    throw new Error("bebop permit: quote.toSign.message missing permitted/owner");
   }
   return buildSellTokenPermitIfNeeded({
     token,
