@@ -1,6 +1,6 @@
 # @arcus-xyz/arcus-spot-sdk
 
-TypeScript SDK for the Arcus spot router server. It wraps the router HTTP API and provides a viem-first signing flow for firm quotes routed through SwapShell — **Arcus RFQ**, **Rialto**, and **LI.FI** venues on Robinhood mainnet (4663) and testnet (46630).
+TypeScript SDK for the Arcus spot router server. It wraps the router HTTP API and provides a viem-first signing flow for firm quotes routed through SwapShell, including **Arcus RFQ**, **Bebop Permit2 RFQ**, **Rialto**, and **LI.FI**.
 
 `viem` is the only runtime dependency (a peer dependency); the SDK ships no other runtime deps.
 
@@ -96,11 +96,17 @@ if (submitResponse.venue === "arcus") {
 }
 ```
 
-`PermitUnsupportedError` also exposes `sellAmount` and `currentAllowance` — USDT-style tokens revert on a nonzero→nonzero approve, so send `approve(0)` first when `currentAllowance` is nonzero. Only contract-shaped failures (missing/reverting `nonces()`) classify a token as non-EIP-2612; transport errors are rethrown so a flaky RPC never downgrades a gasless flow to a gas-costing tx. The rialto and lifi builders share the same behavior.
+`PermitUnsupportedError` also exposes `sellAmount` and `currentAllowance` — USDT-style tokens revert on a nonzero→nonzero approve, so send `approve(0)` first when `currentAllowance` is nonzero. Only contract-shaped failures (missing/reverting `nonces()`) classify a token as non-EIP-2612; transport errors are rethrown so a flaky RPC never downgrades a gasless flow to a gas-costing tx. The Bebop, Rialto, and LI.FI builders share the same behavior.
+
+### Bebop on Robinhood mainnet
+
+Bebop quotes use the same `signQuote` and `submitSignedQuote` flow. The SDK signs the quote's single-token Permit2 `PermitWitnessTransferFrom`, preserves the prepared Bebop transaction for `/submit`, and infers the taker from `message.witness.tokensOwner`.
+
+For a first-time token, call `buildBebopSellTokenPermitIfNeeded({ quote, publicClient, walletClient })` and pass its result through `signQuote(..., { permits })`, just like the Arcus example above. The builder also throws `PermitUnsupportedError` when an on-chain Permit2 approval is required.
 
 The SDK accepts the versioned API base URL, for example `http://localhost:8787/v1`, and calls endpoints like `/quote`, `/price`, `/submit`, `/status`, and `/tokens` relative to it. `health()` remains unversioned at `/health`.
 
-Every firm quote includes `fees`, a normalized route-fee array with `amount` in atoms and `token` as the fee token address. Venues with no reported fee return an empty array; Bebop gas/native fees may include `amountUsd` to show the USD value of the fees.
+Every firm quote includes `fees`, a normalized route-fee array with `amount` in atoms and `token` as the fee token address. Venues with no normalized fee return an empty array. Bebop's upstream gas estimate, when present, remains available as `quote.raw.gasFee`.
 
 Example `quote.fees` from a firm quote:
 

@@ -1,7 +1,7 @@
 import type { Hex, TypedDataDomain } from "viem";
 
-export type SupportedVenue = "arcus" | "rialto" | "lifi";
-export type Venue = SupportedVenue | "bebop";
+export type SupportedVenue = "bebop" | "arcus" | "rialto" | "lifi";
+export type Venue = SupportedVenue;
 
 export type HttpError = {
   kind: "timeout" | "network" | "http_4xx" | "http_5xx" | "parse";
@@ -60,34 +60,6 @@ export type RouteFee = {
   amountUsd?: number;
 };
 
-export type BebopJamOrder = {
-  taker: Hex;
-  receiver: Hex;
-  expiry: number | string;
-  exclusivityDeadline: number | string;
-  nonce: string;
-  executor: Hex;
-  partnerInfo: string;
-  sellTokens: Hex[];
-  buyTokens: Hex[];
-  sellAmounts: string[];
-  buyAmounts: string[];
-  hooksHash: Hex;
-};
-
-export type BebopPermitBatchWitnessTransferFromMessage = {
-  permitted: TokenPermission[];
-  spender: Hex;
-  nonce: string;
-  deadline: number | string;
-  witness: BebopJamOrder;
-};
-
-export type BebopTypedData = Eip712TypedData & {
-  primaryType: "PermitBatchWitnessTransferFrom";
-  message: BebopPermitBatchWitnessTransferFromMessage;
-};
-
 export type BebopTokenQuote = {
   amount: string;
   decimals: number;
@@ -120,22 +92,38 @@ export type BebopQuoteRaw = {
   sellTokens: Record<Hex, BebopTokenQuote>;
   settlementAddress: Hex;
   approvalTarget: Hex;
-  requiredSignatures: Hex[];
+  requiredSignatures?: string[];
   priceImpact?: number;
   warnings: unknown[];
-  hooksHash: Hex;
-  toSign: BebopPermitBatchWitnessTransferFromMessage;
-  solver?: string;
+  onchainOrderType?: string;
+  toSign: Record<string, unknown>;
+  tx?: {
+    to?: string;
+    from?: string;
+    data?: string;
+    value?: string | number;
+    gas?: string | number;
+  } | null;
+  error?: { errorCode?: number; message?: string; requestId?: string };
+};
+
+export type BebopTx = {
+  to: Hex;
+  data: Hex;
+  value: string;
+  originAddress: Hex;
 };
 
 export type BebopFirmQuote = {
   venue: "bebop";
   buyAmount: string;
   sellAmount: string;
+  minBuyAmount: string;
   fees: RouteFee[];
   quoteId: string;
   expiry: number;
-  toSign: BebopTypedData;
+  toSign: Eip712TypedData;
+  tx: BebopTx;
   raw: BebopQuoteRaw;
 };
 
@@ -331,7 +319,24 @@ export type LifiSignedQuote = {
   routeTag?: string;
 };
 
-export type SignedQuote = ArcusSignedQuote | RialtoSignedQuote | LifiSignedQuote;
+/**
+ * Body POSTed to the router's /v1/submit for the Bebop venue. The router
+ * inserts the taker's Permit2 signature into the prepared settle calldata and
+ * relays it through SwapShell.
+ */
+export type BebopSignedQuote = {
+  venue: "bebop";
+  chainId: number;
+  taker: Hex;
+  typedData: Eip712TypedData;
+  signature: Hex;
+  tx: BebopTx;
+  /** Optional EIP-2612 permit for a first-time sellToken→Permit2 allowance. */
+  permits?: Permit[];
+  routeTag?: string;
+};
+
+export type SignedQuote = ArcusSignedQuote | BebopSignedQuote | RialtoSignedQuote | LifiSignedQuote;
 
 export type ArcusSubmitResponse = {
   venue: "arcus";
@@ -355,7 +360,14 @@ export type LifiSubmitResponse = {
   status: "submitted";
 };
 
-export type SubmitResponse = ArcusSubmitResponse | RialtoSubmitResponse | LifiSubmitResponse;
+export type BebopSubmitResponse = {
+  venue: "bebop";
+  txHash: Hex;
+  status: "submitted";
+};
+
+export type SubmitResponse =
+  ArcusSubmitResponse | BebopSubmitResponse | RialtoSubmitResponse | LifiSubmitResponse;
 
 export type NormalizedStatus = "pending" | "submitted" | "confirmed" | "failed" | "unknown";
 

@@ -3,8 +3,8 @@
 Go SDK for the Arcus spot router server. A direct port of the TypeScript SDK
 ([`@arcus-xyz/arcus-spot-sdk`](../README.md)): it wraps the router HTTP API and
 provides a go-ethereum-based signing flow for firm quotes routed through
-SwapShell — **Arcus RFQ**, **Rialto**, and **LI.FI** venues on Robinhood mainnet
-(4663) and testnet (46630).
+SwapShell, including **Arcus RFQ**, **Bebop Permit2 RFQ**, **Rialto**, and
+**LI.FI**.
 
 `github.com/ethereum/go-ethereum` is the only dependency.
 
@@ -152,9 +152,22 @@ USDT-style tokens revert on a nonzero→nonzero approve, so send `approve(0)`
 first when `CurrentAllowance` is nonzero. Only contract-shaped failures
 (missing/reverting `nonces()`) classify a token as non-EIP-2612; transport
 errors are returned as-is so a flaky RPC never downgrades a gasless flow to a
-gas-costing tx. The rialto and lifi builders (`BuildRialtoSellTokenPermitIfNeeded`,
-`BuildLifiSellTokenPermitIfNeeded`) share the same behavior; the lifi builder
+gas-costing tx. The Bebop, Rialto, and LI.FI builders
+(`BuildBebopSellTokenPermitIfNeeded`, `BuildRialtoSellTokenPermitIfNeeded`,
+`BuildLifiSellTokenPermitIfNeeded`) share the same behavior; the LI.FI builder
 requires `Options.Owner` because its witness does not carry the taker.
+
+### Bebop on Robinhood mainnet
+
+Bebop quotes use the same `SignQuote` and `SubmitSignedQuote` flow. The SDK
+signs the quote's single-token Permit2 `PermitWitnessTransferFrom`, preserves
+the prepared `BebopTx` for `/submit`, and infers the taker from
+`message.witness.tokensOwner`.
+
+For a first-time token, call `BuildBebopSellTokenPermitIfNeeded` and include the
+result in `SignQuoteOptions.Permits`, just like the Arcus flow above. The builder
+also returns `PermitUnsupportedError` when an on-chain Permit2 approval is
+required.
 
 ### Chain deployments and token list
 

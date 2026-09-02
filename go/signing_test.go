@@ -212,10 +212,75 @@ func TestSignQuoteInfersArcusTaker(t *testing.T) {
 	}
 }
 
-func TestSignQuoteRejectsBebop(t *testing.T) {
+func TestSignQuoteBebop(t *testing.T) {
 	signer := testSigner(t)
-	if _, err := SignQuote(&BebopFirmQuote{Venue: VenueBebop}, signer, nil); err == nil {
-		t.Fatal("expected error for bebop venue")
+	typedData := Eip712TypedData{
+		Domain: TypedDataDomain{
+			Name:              "Permit2",
+			ChainID:           NewBigIntish(big.NewInt(4663)),
+			VerifyingContract: Permit2Address.Hex(),
+		},
+		Types: map[string][]TypedDataField{
+			"PermitWitnessTransferFrom": {
+				{Name: "permitted", Type: "TokenPermissions"},
+				{Name: "spender", Type: "address"},
+				{Name: "nonce", Type: "uint256"},
+				{Name: "deadline", Type: "uint256"},
+				{Name: "witness", Type: "BebopRouterOrder"},
+			},
+			"TokenPermissions": {
+				{Name: "token", Type: "address"},
+				{Name: "amount", Type: "uint256"},
+			},
+			"BebopRouterOrder": {
+				{Name: "tokensOwner", Type: "address"},
+			},
+		},
+		PrimaryType: "PermitWitnessTransferFrom",
+		Message: map[string]any{
+			"permitted": map[string]any{
+				"token":  "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
+				"amount": "1000000",
+			},
+			"spender":  RobinhoodMainnetDeployments.BebopRouter.Hex(),
+			"nonce":    "9",
+			"deadline": "9999999999",
+			"witness": map[string]any{
+				"tokensOwner": signer.Address().Hex(),
+			},
+		},
+	}
+	quote := &BebopFirmQuote{
+		Venue:        VenueBebop,
+		BuyAmount:    "400",
+		SellAmount:   "1000000",
+		MinBuyAmount: "390",
+		QuoteID:      "q1",
+		ToSign:       typedData,
+		Tx: BebopTx{
+			To:            RobinhoodMainnetDeployments.BebopRouter,
+			Data:          hexutil.MustDecode("0x1234"),
+			Value:         "0",
+			OriginAddress: common.Address{},
+		},
+	}
+
+	signed, err := SignQuote(quote, signer, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bebop, ok := signed.(*BebopSignedQuote)
+	if !ok {
+		t.Fatalf("expected *BebopSignedQuote, got %T", signed)
+	}
+	if bebop.ChainID != 4663 || bebop.Taker != signer.Address() {
+		t.Errorf("unexpected chain/taker: %d/%s", bebop.ChainID, bebop.Taker)
+	}
+	if len(bebop.Signature) != 65 {
+		t.Errorf("signature length: got %d, want 65", len(bebop.Signature))
+	}
+	if bebop.Tx.To != quote.Tx.To || !bytes.Equal(bebop.Tx.Data, quote.Tx.Data) {
+		t.Error("tx not echoed back into the signed quote")
 	}
 }
 

@@ -23,6 +23,8 @@ export type ChainDeployments = {
   rialtoRouter?: Address;
   /** LI.FI Permit2Proxy (`SwapExecuted.router` for routeTag "LIFI"). */
   lifiPermit2Proxy?: Address;
+  /** Bebop Permit2 settlement router (`SwapExecuted.router` for routeTag "BEBOP"). */
+  bebopRouter?: Address;
   /** 0x venue router (`SwapExecuted.router` for routeTag "ZEROEX"). */
   zeroexRouter?: Address;
 };
@@ -48,6 +50,7 @@ export const ROBINHOOD_MAINNET_DEPLOYMENTS = {
   arcusWrappedTokenBeacon: "0x27fEB332759F8d2f351D7fC72D29af37664ffd77",
   rialtoRouter: "0xC94135b63772b91D79d0A2DaAb2a8801f32359bD",
   lifiPermit2Proxy: "0x8eABB4E117fB70b346592e013855f6d825F50af1",
+  bebopRouter: "0xBeb0009ACa35087ce7cCF11637E24dd1Aad3bf2A",
 } as const satisfies ChainDeployments;
 
 export const ROBINHOOD_TESTNET_DEPLOYMENTS = {
@@ -90,6 +93,7 @@ export function getSettlementSourceAddresses(chainId: number): readonly Address[
     deployments.arcusWrappedEscrow,
     deployments.rialtoRouter,
     deployments.lifiPermit2Proxy,
+    deployments.bebopRouter,
     deployments.zeroexRouter,
   ];
   return sources

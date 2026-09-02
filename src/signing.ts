@@ -2,6 +2,8 @@ import type { Account, Hex, WalletClient } from "viem";
 import type {
   ArcusFirmQuote,
   ArcusSignedQuote,
+  BebopFirmQuote,
+  BebopSignedQuote,
   Eip712TypedData,
   FirmQuote,
   LifiFirmQuote,
@@ -23,7 +25,7 @@ export type SignQuoteOptions = {
   taker?: Hex;
   account?: Account | Hex;
   /**
-   * Optional EIP-2612 permits to fold into SwapShell.permits[] (arcus). Use when
+   * Optional EIP-2612 permits to fold into SwapShell.permits[]. Use when
    * the taker's sellToken→Permit2 allowance is missing and they sign a one-time
    * permit instead of an approve() tx
    */
@@ -53,7 +55,10 @@ export async function signQuote(
   if (quote.venue === "lifi") {
     return signLifiQuote(quote, walletClient, taker, options);
   }
-  throw new Error(`signQuote does not support venue ${quote.venue}`);
+  if (quote.venue === "bebop") {
+    return signBebopQuote(quote, walletClient, taker, options);
+  }
+  throw new Error("signQuote received an unsupported venue");
 }
 
 export async function signTypedDataWithViem(
@@ -159,6 +164,26 @@ async function signLifiQuote(
   };
 }
 
+async function signBebopQuote(
+  quote: BebopFirmQuote,
+  walletClient: WalletClient,
+  taker: Hex,
+  options: SignQuoteOptions,
+): Promise<BebopSignedQuote> {
+  const signature = await signTypedDataWithViem(walletClient, quote.toSign, options.account);
+  const permits = options.permits?.length ? options.permits : undefined;
+
+  return {
+    venue: "bebop",
+    chainId: typedDataChainId(quote.toSign),
+    taker,
+    typedData: quote.toSign,
+    signature,
+    tx: quote.tx,
+    ...(permits ? { permits } : {}),
+  };
+}
+
 function stripEip712Domain(types: Eip712TypedData["types"]): Eip712TypedData["types"] {
   const { EIP712Domain: _domain, ...rest } = types;
   return rest;
@@ -173,6 +198,10 @@ function inferTaker(quote: FirmQuote): Hex | undefined {
     // RialtoSwap witness recipient is the taker (funds land there).
     const recipient = nestedValue(quote.toSign.message, ["witness", "recipient"]);
     return isHexAddress(recipient) ? recipient : undefined;
+  }
+  if (quote.venue === "bebop") {
+    const tokensOwner = nestedValue(quote.toSign.message, ["witness", "tokensOwner"]);
+    return isHexAddress(tokensOwner) ? tokensOwner : undefined;
   }
 
   const typedData = maybeTradeTypedData(quote);

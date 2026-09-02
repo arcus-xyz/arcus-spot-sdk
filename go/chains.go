@@ -36,6 +36,9 @@ type ChainDeployments struct {
 	// LifiPermit2Proxy is the LI.FI Permit2Proxy (SwapExecuted.router for
 	// routeTag "LIFI").
 	LifiPermit2Proxy common.Address
+	// BebopRouter is the Bebop Permit2 settlement router (SwapExecuted.router
+	// for routeTag "BEBOP").
+	BebopRouter common.Address
 	// ZeroexRouter is the 0x venue router (SwapExecuted.router for routeTag
 	// "ZEROEX").
 	ZeroexRouter common.Address
@@ -65,6 +68,7 @@ var RobinhoodMainnetDeployments = ChainDeployments{
 	ArcusWrappedTokenBeacon:  common.HexToAddress("0x27fEB332759F8d2f351D7fC72D29af37664ffd77"),
 	RialtoRouter:             common.HexToAddress("0xC94135b63772b91D79d0A2DaAb2a8801f32359bD"),
 	LifiPermit2Proxy:         common.HexToAddress("0x8eABB4E117fB70b346592e013855f6d825F50af1"),
+	BebopRouter:              common.HexToAddress("0xBeb0009ACa35087ce7cCF11637E24dd1Aad3bf2A"),
 }
 
 // RobinhoodTestnetDeployments is the Robinhood testnet (46630) deployment set.
@@ -120,6 +124,7 @@ func GetSettlementSourceAddresses(chainID uint64) []common.Address {
 		deployments.ArcusWrappedEscrow,
 		deployments.RialtoRouter,
 		deployments.LifiPermit2Proxy,
+		deployments.BebopRouter,
 		deployments.ZeroexRouter,
 	}
 	sources := make([]common.Address, 0, len(candidates))

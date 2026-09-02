@@ -171,7 +171,7 @@ type SignQuoteOptions struct {
 }
 
 // SignQuote signs a firm quote's trade payload and assembles the venue-specific
-// submit body. Bebop quotes are not supported.
+// submit body.
 func SignQuote(quote FirmQuote, signer TypedDataSigner, options *SignQuoteOptions) (SignedQuote, error) {
 	if options == nil {
 		options = &SignQuoteOptions{}
@@ -195,9 +195,31 @@ func SignQuote(quote FirmQuote, signer TypedDataSigner, options *SignQuoteOption
 		return signRialtoQuote(q, signer, taker, options)
 	case *LifiFirmQuote:
 		return signLifiQuote(q, signer, taker, options)
+	case *BebopFirmQuote:
+		return signBebopQuote(q, signer, taker, options)
 	default:
 		return nil, fmt.Errorf("arcusspot: SignQuote does not support venue %s", quote.FirmQuoteVenue())
 	}
+}
+
+func signBebopQuote(quote *BebopFirmQuote, signer TypedDataSigner, taker common.Address, options *SignQuoteOptions) (*BebopSignedQuote, error) {
+	signature, err := signer.SignTypedData(quote.ToSign)
+	if err != nil {
+		return nil, err
+	}
+	chainID, err := typedDataChainID(&quote.ToSign)
+	if err != nil {
+		return nil, err
+	}
+	return &BebopSignedQuote{
+		Venue:     VenueBebop,
+		ChainID:   chainID,
+		Taker:     taker,
+		TypedData: quote.ToSign,
+		Signature: signature,
+		Tx:        quote.Tx,
+		Permits:   options.Permits,
+	}, nil
 }
 
 func signArcusQuote(quote *ArcusFirmQuote, signer TypedDataSigner, taker common.Address, options *SignQuoteOptions) (*ArcusSignedQuote, error) {
@@ -294,8 +316,7 @@ func typedDataChainID(typedData *Eip712TypedData) (uint64, error) {
 	return typedData.Domain.ChainID.Int().Uint64(), nil
 }
 
-// inferTaker mirrors the TS SDK: arcus binds the taker in witness.taker, rialto
-// in witness.recipient, and other venues in the top-level owner field.
+// inferTaker mirrors the TS SDK's venue-specific witness bindings.
 func inferTaker(quote FirmQuote) common.Address {
 	message := quote.TradeTypedData().Message
 	switch quote.FirmQuoteVenue() {
@@ -303,6 +324,8 @@ func inferTaker(quote FirmQuote) common.Address {
 		return addressAtPath(message, "witness", "taker")
 	case VenueRialto:
 		return addressAtPath(message, "witness", "recipient")
+	case VenueBebop:
+		return addressAtPath(message, "witness", "tokensOwner")
 	default:
 		return addressAtPath(message, "owner")
 	}

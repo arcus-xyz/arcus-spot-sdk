@@ -132,6 +132,33 @@ func TestBuildPermitSkipsWhenAllowanceSuffices(t *testing.T) {
 	}
 }
 
+func TestBuildBebopPermitUsesWitnessOwner(t *testing.T) {
+	signer := testSigner(t)
+	token := common.HexToAddress("0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168")
+	quote := &BebopFirmQuote{
+		Venue: VenueBebop,
+		ToSign: Eip712TypedData{
+			Domain: TypedDataDomain{ChainID: NewBigIntish(big.NewInt(4663))},
+			Message: map[string]any{
+				"permitted": map[string]any{"token": token.Hex(), "amount": "1000000"},
+				"witness":   map[string]any{"tokensOwner": signer.Address().Hex()},
+			},
+		},
+	}
+	caller := &fakeCaller{allowance: big.NewInt(1000000), nonce: big.NewInt(0), name: "Mock USD"}
+
+	permit, err := BuildBebopSellTokenPermitIfNeeded(context.Background(), quote, BuildPermitOptions{
+		Caller: caller,
+		Signer: signer,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if permit != nil {
+		t.Fatalf("expected nil permit for sufficient allowance, got %+v", permit)
+	}
+}
+
 // Mirrors test/permits.test.ts: a reverting nonces() marks the token as
 // non-EIP-2612 and surfaces the approve fallback via PermitUnsupportedError.
 func TestBuildPermitUnsupportedToken(t *testing.T) {
