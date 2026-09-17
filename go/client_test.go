@@ -189,3 +189,40 @@ func TestClientVenueDetailsErrorParsing(t *testing.T) {
 		t.Errorf("message: got %q, want %q", routerErr.Message, want)
 	}
 }
+
+func TestClientSendsAPIKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Api-Key"); got != "arc_test" {
+			t.Errorf("X-Api-Key: got %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	t.Cleanup(server.Close)
+	client, err := NewSpotRouterClient(ClientOptions{BaseURL: server.URL + "/v1", APIKey: "arc_test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.GetTokenList(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClientForwardsBuilderFeeBps(t *testing.T) {
+	bps := 80
+	client, _ := newTestRouter(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("builderFeeBps"); got != "80" {
+			t.Errorf("builderFeeBps: got %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"recommended":"arcus","venue":"arcus","details":{"paths":[]},"all":[]}`))
+	}))
+	if _, err := client.GetPrice(context.Background(), PriceRequest{
+		SellToken:     "0x1",
+		BuyToken:      "0x2",
+		SellAmount:    "1",
+		BuilderFeeBps: &bps,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

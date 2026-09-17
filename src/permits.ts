@@ -3,6 +3,9 @@ import {
   ContractFunctionRevertedError,
   ContractFunctionZeroDataError,
   ExecutionRevertedError,
+  encodeAbiParameters,
+  keccak256,
+  toBytes,
   type Account,
   type Address,
   type Hex,
@@ -48,7 +51,75 @@ const erc20PermitAbi = [
     inputs: [{ name: "owner", type: "address" }],
     outputs: [{ type: "uint256" }],
   },
+  {
+    type: "function",
+    name: "DOMAIN_SEPARATOR",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "bytes32" }],
+  },
 ] as const;
+
+// EIP-5267: the domain the token actually uses to verify permits. Prefer this
+// over `version()`, which some tokens (e.g. CircusQuoteTokenV3) expose as a
+// metadata tag that is not the EIP-712 domain version.
+const eip712DomainAbi = [
+  {
+    type: "function",
+    name: "eip712Domain",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [
+      { name: "fields", type: "bytes1" },
+      { name: "name", type: "string" },
+      { name: "version", type: "string" },
+      { name: "chainId", type: "uint256" },
+      { name: "verifyingContract", type: "address" },
+      { name: "salt", type: "bytes32" },
+      { name: "extensions", type: "uint256[]" },
+    ],
+  },
+] as const;
+
+const versionAbi = [
+  {
+    type: "function",
+    name: "version",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "string" }],
+  },
+] as const;
+
+const EIP712_DOMAIN_TYPEHASH = keccak256(
+  toBytes("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+);
+
+function eip2612DomainSeparator(
+  name: string,
+  version: string,
+  chainId: number,
+  verifyingContract: Address,
+): Hex {
+  return keccak256(
+    encodeAbiParameters(
+      [
+        { type: "bytes32" },
+        { type: "bytes32" },
+        { type: "bytes32" },
+        { type: "uint256" },
+        { type: "address" },
+      ],
+      [
+        EIP712_DOMAIN_TYPEHASH,
+        keccak256(toBytes(name)),
+        keccak256(toBytes(version)),
+        BigInt(chainId),
+        verifyingContract,
+      ],
+    ),
+  );
+}
 
 /** Minimal ERC-20 approve ABI for the non-EIP-2612 fallback tx. */
 export const erc20ApproveAbi = [
@@ -187,29 +258,72 @@ export async function buildArcusSellTokenPermitIfNeeded(
   });
 }
 
-// Some EIP-2612 tokens (e.g. USDC on Arbitrum) use a domain version other than
-// "1"; signing with the wrong version yields a permit that reverts on-chain. Read
-// `version()` when the token exposes it, falling back to "1".
-const versionAbi = [
-  {
-    type: "function",
-    name: "version",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ type: "string" }],
-  },
-] as const;
-
-async function readEip2612Version(publicClient: PublicClient, token: Address): Promise<string> {
+// Resolve the EIP-712 name+version the token will use in permit().
+//
+// `version()` is not authoritative: USDC-style tokens use it as the domain
+// version ("2"), but CircusQuoteTokenV3 returns "v3" as a launch-token
+// generation tag while its DOMAIN_SEPARATOR is hashed with "1". Signing the
+// wrong version recovers a different address and the token reverts
+// ERC2612InvalidSigner. Prefer EIP-5267 `eip712Domain()`, then keep a
+// `version()` / "1" / "2" candidate only when it matches DOMAIN_SEPARATOR().
+async function readEip2612Domain(
+  publicClient: PublicClient,
+  token: Address,
+  chainId: number,
+): Promise<{ name: string; version: string }> {
   try {
-    return await publicClient.readContract({
+    const domain = await publicClient.readContract({
+      address: token,
+      abi: eip712DomainAbi,
+      functionName: "eip712Domain",
+    });
+    const name = domain[1];
+    const version = domain[2];
+    if (name && version) {
+      return { name, version };
+    }
+  } catch {
+    // Token has no EIP-5267 eip712Domain(); fall through.
+  }
+
+  const name = await publicClient.readContract({
+    address: token,
+    abi: erc20PermitAbi,
+    functionName: "name",
+  });
+
+  let versionFn: string | undefined;
+  try {
+    versionFn = await publicClient.readContract({
       address: token,
       abi: versionAbi,
       functionName: "version",
     });
   } catch {
-    return "1";
+    versionFn = undefined;
   }
+
+  try {
+    const onchain = await publicClient.readContract({
+      address: token,
+      abi: erc20PermitAbi,
+      functionName: "DOMAIN_SEPARATOR",
+    });
+    const candidates = [versionFn, "1", "2"].filter(
+      (value, index, all): value is string =>
+        typeof value === "string" && value.length > 0 && all.indexOf(value) === index,
+    );
+    for (const version of candidates) {
+      const computed = eip2612DomainSeparator(name, version, chainId, token);
+      if (computed.toLowerCase() === onchain.toLowerCase()) {
+        return { name, version };
+      }
+    }
+  } catch {
+    // Token has no DOMAIN_SEPARATOR(); fall through to the heuristic.
+  }
+
+  return { name, version: versionFn ?? "1" };
 }
 
 type SellTokenPermitCore = {
@@ -262,10 +376,7 @@ async function buildSellTokenPermitIfNeeded(
   const value = core.value ?? MAX_UINT256;
   const deadline = core.deadline ?? BigInt(Math.floor(Date.now() / 1000) + 30 * 60);
 
-  const [name, version] = await Promise.all([
-    publicClient.readContract({ address: token, abi: erc20PermitAbi, functionName: "name" }),
-    readEip2612Version(publicClient, token),
-  ]);
+  const { name, version } = await readEip2612Domain(publicClient, token, chainId);
 
   const typedData: Eip712TypedData = {
     domain: { name, version, chainId, verifyingContract: token },
@@ -282,7 +393,7 @@ async function buildSellTokenPermitIfNeeded(
 
 export type BuildRialtoPermitOptions = {
   quote: RialtoFirmQuote;
-  /** Read-only client for allowance / name / nonces / version. */
+  /** Read-only client for allowance / name / nonces / EIP-712 domain. */
   publicClient: PublicClient;
   /** Wallet that signs the EIP-2612 permit (must be the taker / token owner). */
   walletClient: WalletClient;
@@ -301,18 +412,15 @@ export type BuildRialtoPermitOptions = {
  * at least `sellAmount`, and throws {@link PermitUnsupportedError} for non-EIP-2612
  * tokens. Folding the returned permit into the signed quote makes a first-time
  * taker's swap fully gasless (SwapShell applies it before RialtoRouter pulls
- * funds). Mirrors the arcus builder but reads the token's EIP-2612 version.
+ * funds). Mirrors the arcus builder but reads the token's EIP-712 domain.
  */
 export async function buildRialtoSellTokenPermitIfNeeded(
   options: BuildRialtoPermitOptions,
 ): Promise<Permit | undefined> {
-  const message = options.quote.toSign.message as {
-    permitted?: { token?: string; amount?: string };
-    witness?: { recipient?: string };
-  };
-  const token = message.permitted?.token as Address | undefined;
-  const owner = (options.taker ?? message.witness?.recipient) as Address | undefined;
-  if (!token || !owner || message.permitted?.amount == null) {
+  const message = options.quote.toSign.message;
+  const token = message.permitted.token;
+  const owner = options.taker ?? message.witness.recipient;
+  if (!token || !owner || message.permitted.amount == null) {
     throw new Error("rialto permit: quote.toSign.message missing permitted/owner");
   }
   return buildSellTokenPermitIfNeeded({

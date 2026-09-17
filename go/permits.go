@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 // MaxUint256 is the default permit/approve amount: unlimited, so the taker
@@ -27,8 +28,10 @@ const erc20PermitABIJSON = `[
   {"type":"function","name":"allowance","stateMutability":"view","inputs":[{"name":"owner","type":"address"},{"name":"spender","type":"address"}],"outputs":[{"type":"uint256"}]},
   {"type":"function","name":"name","stateMutability":"view","inputs":[],"outputs":[{"type":"string"}]},
   {"type":"function","name":"nonces","stateMutability":"view","inputs":[{"name":"owner","type":"address"}],"outputs":[{"type":"uint256"}]},
-  {"type":"function","name":"version","stateMutability":"view","inputs":[],"outputs":[{"type":"string"}]},
-  {"type":"function","name":"approve","stateMutability":"nonpayable","inputs":[{"name":"spender","type":"address"},{"name":"amount","type":"uint256"}],"outputs":[{"type":"bool"}]}
+	{"type":"function","name":"version","stateMutability":"view","inputs":[],"outputs":[{"type":"string"}]},
+	{"type":"function","name":"DOMAIN_SEPARATOR","stateMutability":"view","inputs":[],"outputs":[{"type":"bytes32"}]},
+	{"type":"function","name":"eip712Domain","stateMutability":"view","inputs":[],"outputs":[{"name":"fields","type":"bytes1"},{"name":"name","type":"string"},{"name":"version","type":"string"},{"name":"chainId","type":"uint256"},{"name":"verifyingContract","type":"address"},{"name":"salt","type":"bytes32"},{"name":"extensions","type":"uint256[]"}]},
+	{"type":"function","name":"approve","stateMutability":"nonpayable","inputs":[{"name":"spender","type":"address"},{"name":"amount","type":"uint256"}],"outputs":[{"type":"bool"}]}
 ]`
 
 // ERC20PermitABI is the parsed minimal ERC-20 + EIP-2612 ABI. Use it to send
@@ -225,11 +228,10 @@ func buildSellTokenPermitIfNeeded(ctx context.Context, core sellTokenPermitCore)
 		deadline = big.NewInt(time.Now().Add(DefaultPermitTTL).Unix())
 	}
 
-	name, err := readString(ctx, caller, core.Token, "name")
+	name, version, err := readEip2612Domain(ctx, caller, core.Token, chainID)
 	if err != nil {
 		return nil, err
 	}
-	version := readEip2612Version(ctx, caller, core.Token)
 
 	typedData := Eip712TypedData{
 		Domain: TypedDataDomain{
@@ -276,16 +278,105 @@ func buildSellTokenPermitIfNeeded(ctx context.Context, core sellTokenPermitCore)
 	}, nil
 }
 
-// readEip2612Version reads the token's EIP-2612 domain version when exposed,
-// falling back to "1". Some EIP-2612 tokens (e.g. USDC on Arbitrum) use a
-// domain version other than "1"; signing with the wrong version yields a permit
-// that reverts on-chain.
-func readEip2612Version(ctx context.Context, caller ContractCaller, token common.Address) string {
-	version, err := readString(ctx, caller, token, "version")
-	if err != nil {
-		return "1"
+// readEip2612Domain resolves the EIP-712 name+version the token will use in
+// permit(). Prefer EIP-5267 eip712Domain(), then keep a version() / "1" / "2"
+// candidate only when it matches DOMAIN_SEPARATOR().
+func readEip2612Domain(
+	ctx context.Context,
+	caller ContractCaller,
+	token common.Address,
+	chainID *big.Int,
+) (string, string, error) {
+	if values, err := callMethod(ctx, caller, token, "eip712Domain"); err == nil && len(values) >= 3 {
+		name, nameOK := values[1].(string)
+		version, versionOK := values[2].(string)
+		if nameOK && versionOK && name != "" && version != "" {
+			return name, version, nil
+		}
 	}
-	return version
+
+	name, err := readString(ctx, caller, token, "name")
+	if err != nil {
+		return "", "", err
+	}
+
+	var versionFn string
+	if version, err := readString(ctx, caller, token, "version"); err == nil && version != "" {
+		versionFn = version
+	}
+
+	if onchain, err := readBytes32(ctx, caller, token, "DOMAIN_SEPARATOR"); err == nil {
+		candidates := uniqueNonEmpty(versionFn, "1", "2")
+		for _, version := range candidates {
+			if eip2612DomainSeparator(name, version, chainID, token) == onchain {
+				return name, version, nil
+			}
+		}
+	}
+
+	if versionFn == "" {
+		versionFn = "1"
+	}
+	return name, versionFn, nil
+}
+
+func uniqueNonEmpty(values ...string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func eip2612DomainSeparator(name, version string, chainID *big.Int, verifyingContract common.Address) common.Hash {
+	bytes32Type, _ := abi.NewType("bytes32", "", nil)
+	uint256Type, _ := abi.NewType("uint256", "", nil)
+	addressType, _ := abi.NewType("address", "", nil)
+	args := abi.Arguments{
+		{Type: bytes32Type},
+		{Type: bytes32Type},
+		{Type: bytes32Type},
+		{Type: uint256Type},
+		{Type: addressType},
+	}
+	packed, err := args.Pack(
+		eip712DomainTypehash,
+		crypto.Keccak256Hash([]byte(name)),
+		crypto.Keccak256Hash([]byte(version)),
+		chainID,
+		verifyingContract,
+	)
+	if err != nil {
+		return common.Hash{}
+	}
+	return crypto.Keccak256Hash(packed)
+}
+
+var eip712DomainTypehash = crypto.Keccak256Hash(
+	[]byte("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+)
+
+func readBytes32(ctx context.Context, caller ContractCaller, token common.Address, method string) (common.Hash, error) {
+	values, err := callMethod(ctx, caller, token, method)
+	if err != nil {
+		return common.Hash{}, err
+	}
+	switch value := values[0].(type) {
+	case [32]byte:
+		return common.Hash(value), nil
+	case common.Hash:
+		return value, nil
+	default:
+		return common.Hash{}, fmt.Errorf("arcusspot: %s returned unexpected type %T", method, values[0])
+	}
 }
 
 func callMethod(ctx context.Context, caller ContractCaller, token common.Address, method string, args ...any) ([]any, error) {

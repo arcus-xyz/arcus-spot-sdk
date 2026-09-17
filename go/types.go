@@ -21,11 +21,32 @@ type Venue string
 // SupportedVenue values are the venues signQuote/submit support; "bebop" only
 // appears in price/quote responses.
 const (
+	VenueZerox  Venue = "zerox"
 	VenueArcus  Venue = "arcus"
 	VenueRialto Venue = "rialto"
 	VenueLifi   Venue = "lifi"
 	VenueBebop  Venue = "bebop"
 )
+
+// RouteHop is one hop inside a priced/quoted path.
+type RouteHop struct {
+	Protocol string          `json:"protocol"`
+	ID       string          `json:"id,omitempty"`
+	FeeTier  *int            `json:"feeTier,omitempty"`
+	From     *common.Address `json:"from,omitempty"`
+	To       *common.Address `json:"to,omitempty"`
+}
+
+// RoutePath is one path of a quote, with a share of the notional.
+type RoutePath struct {
+	ProportionBps int        `json:"proportionBps"`
+	Hops          []RouteHop `json:"hops"`
+}
+
+// QuoteDetails carries the winning or candidate route paths.
+type QuoteDetails struct {
+	Paths []RoutePath `json:"paths"`
+}
 
 // HTTPError is the router's normalized upstream-error shape.
 type HTTPError struct {
@@ -46,19 +67,26 @@ type PriceRequest struct {
 	SellToken  string
 	BuyToken   string
 	SellAmount string // decimal string, atoms
+	// BuilderFeeBps is Arcus-only. Human bps for a builder share. Requires
+	// X-Api-Key. Nil omits the parameter; 0 collects none.
+	BuilderFeeBps *int
 }
 
 // NormalizedPrice is one venue's indicative price.
 type NormalizedPrice struct {
 	Venue      Venue           `json:"venue"`
+	Details    QuoteDetails    `json:"details"`
 	BuyAmount  string          `json:"buyAmount"`
 	SellAmount string          `json:"sellAmount"`
+	Fees       []RouteFee      `json:"fees"`
 	Raw        json.RawMessage `json:"raw,omitempty"`
 }
 
 // PriceResponse is the body of GET /v1/price.
 type PriceResponse struct {
 	Recommended Venue             `json:"recommended"`
+	Venue       Venue             `json:"venue"`
+	Details     QuoteDetails      `json:"details"`
 	All         []NormalizedPrice `json:"all"`
 	Errors      []VenueError      `json:"errors,omitempty"`
 }
@@ -190,6 +218,9 @@ type RouteFee struct {
 	Token     common.Address `json:"token"`
 	Type      string         `json:"type"`
 	AmountUSD float64        `json:"amountUsd,omitempty"`
+	// Bps is the known proportional rate from the buy-token fee leg (human;
+	// tenths are allowed, e.g. 3.5). Additive; absolute Amount remains.
+	Bps float64 `json:"bps,omitempty"`
 }
 
 // TakerIntent is the Arcus RFQ order witness. Public HTTP numeric fields are
@@ -223,9 +254,51 @@ type FirmQuote interface {
 	TradeTypedData() *Eip712TypedData
 }
 
+// ZeroxSettlerMetaTransaction is the 0x gasless trade payload.
+type ZeroxSettlerMetaTransaction struct {
+	Type   string          `json:"type"`
+	Hash   string          `json:"hash,omitempty"`
+	EIP712 Eip712TypedData `json:"eip712"`
+}
+
+// ZeroxGaslessApproval is an optional EIP-2612 approval bundled by 0x.
+type ZeroxGaslessApproval struct {
+	Type   string          `json:"type"`
+	EIP712 Eip712TypedData `json:"eip712"`
+}
+
+// ZeroxFirmQuote is a firm quote from the 0x gasless venue.
+type ZeroxFirmQuote struct {
+	Venue        Venue                        `json:"venue"` // always "zerox"
+	Details      QuoteDetails                 `json:"details"`
+	BuyAmount    string                       `json:"buyAmount"`
+	SellAmount   string                       `json:"sellAmount"`
+	MinBuyAmount string                       `json:"minBuyAmount,omitempty"`
+	Fees         []RouteFee                   `json:"fees"`
+	ToSign       *Eip712TypedData             `json:"toSign,omitempty"`
+	Trade        *ZeroxSettlerMetaTransaction `json:"trade,omitempty"`
+	Approval     *ZeroxGaslessApproval        `json:"approval,omitempty"`
+	Raw          json.RawMessage              `json:"raw"`
+}
+
+// FirmQuoteVenue implements FirmQuote.
+func (q *ZeroxFirmQuote) FirmQuoteVenue() Venue { return VenueZerox }
+
+// TradeTypedData implements FirmQuote.
+func (q *ZeroxFirmQuote) TradeTypedData() *Eip712TypedData {
+	if q.ToSign != nil {
+		return q.ToSign
+	}
+	if q.Trade != nil {
+		return &q.Trade.EIP712
+	}
+	return nil
+}
+
 // ArcusFirmQuote is a firm quote from the Arcus RFQ venue.
 type ArcusFirmQuote struct {
 	Venue      Venue           `json:"venue"` // always "arcus"
+	Details    QuoteDetails    `json:"details"`
 	BuyAmount  string          `json:"buyAmount"`
 	SellAmount string          `json:"sellAmount"`
 	Fees       []RouteFee      `json:"fees"`
@@ -255,6 +328,7 @@ type RialtoTx struct {
 // RialtoFirmQuote is a firm quote from the Rialto venue.
 type RialtoFirmQuote struct {
 	Venue        Venue           `json:"venue"` // always "rialto"
+	Details      QuoteDetails    `json:"details"`
 	BuyAmount    string          `json:"buyAmount"`
 	SellAmount   string          `json:"sellAmount"`
 	MinBuyAmount string          `json:"minBuyAmount"`
@@ -264,7 +338,8 @@ type RialtoFirmQuote struct {
 	Tx           RialtoTx        `json:"tx"`
 	// NeedsAllowance is true when the taker needs a one-time sellToken→Permit2
 	// approval (build a permit).
-	NeedsAllowance bool `json:"needsAllowance,omitempty"`
+	NeedsAllowance bool            `json:"needsAllowance,omitempty"`
+	Raw            json.RawMessage `json:"raw,omitempty"`
 }
 
 // FirmQuoteVenue implements FirmQuote.
@@ -290,6 +365,7 @@ type LifiQuoteRaw = json.RawMessage
 // LifiFirmQuote is a firm quote from the LI.FI venue.
 type LifiFirmQuote struct {
 	Venue        Venue           `json:"venue"` // always "lifi"
+	Details      QuoteDetails    `json:"details"`
 	BuyAmount    string          `json:"buyAmount"`
 	SellAmount   string          `json:"sellAmount"`
 	MinBuyAmount string          `json:"minBuyAmount"`
@@ -313,6 +389,7 @@ func (q *LifiFirmQuote) TradeTypedData() *Eip712TypedData { return &q.ToSign }
 // support bebop; the type exists so quote responses parse losslessly.
 type BebopFirmQuote struct {
 	Venue      Venue           `json:"venue"` // always "bebop"
+	Details    QuoteDetails    `json:"details"`
 	BuyAmount  string          `json:"buyAmount"`
 	SellAmount string          `json:"sellAmount"`
 	Fees       []RouteFee      `json:"fees"`
@@ -332,6 +409,8 @@ func (q *BebopFirmQuote) TradeTypedData() *Eip712TypedData { return &q.ToSign }
 // version does not know are skipped so new venues stay forward-compatible.
 type QuoteResponse struct {
 	Recommended Venue        `json:"recommended"`
+	Venue       Venue        `json:"venue"`
+	Details     QuoteDetails `json:"details"`
 	All         []FirmQuote  `json:"all"`
 	Errors      []VenueError `json:"errors,omitempty"`
 }
@@ -341,6 +420,8 @@ type QuoteResponse struct {
 func (r *QuoteResponse) UnmarshalJSON(data []byte) error {
 	var raw struct {
 		Recommended Venue             `json:"recommended"`
+		Venue       Venue             `json:"venue"`
+		Details     QuoteDetails      `json:"details"`
 		All         []json.RawMessage `json:"all"`
 		Errors      []VenueError      `json:"errors"`
 	}
@@ -348,6 +429,8 @@ func (r *QuoteResponse) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	r.Recommended = raw.Recommended
+	r.Venue = raw.Venue
+	r.Details = raw.Details
 	r.Errors = raw.Errors
 	r.All = r.All[:0]
 	for _, entry := range raw.All {
@@ -371,6 +454,8 @@ func unmarshalFirmQuote(data json.RawMessage) (FirmQuote, error) {
 	}
 	var quote FirmQuote
 	switch peek.Venue {
+	case VenueZerox:
+		quote = &ZeroxFirmQuote{}
 	case VenueArcus:
 		quote = &ArcusFirmQuote{}
 	case VenueRialto:
@@ -431,7 +516,25 @@ type ArcusSignedQuote struct {
 	// RouteTag is an optional discriminator surfaced as bytes32 in the
 	// SwapShell event.
 	RouteTag string `json:"routeTag,omitempty"`
+	// BuilderFeeBps is the same per-request builder bps as /price /quote
+	// (must be ≤ the key max).
+	BuilderFeeBps *int `json:"builderFeeBps,omitempty"`
 }
+
+// ZeroxSignedQuote is the submit body for the zerox venue.
+type ZeroxSignedQuote struct {
+	Venue           Venue           `json:"venue"` // always "zerox"
+	ChainID         uint64          `json:"chainId"`
+	Taker           common.Address  `json:"taker"`
+	TypedData       Eip712TypedData `json:"typedData"`
+	Signature       hexutil.Bytes   `json:"signature"`
+	QuotedAmountIn  string          `json:"quotedAmountIn,omitempty"`
+	QuotedAmountOut string          `json:"quotedAmountOut,omitempty"`
+	Permits         []Permit        `json:"permits,omitempty"`
+}
+
+// SignedQuoteVenue implements SignedQuote.
+func (q *ZeroxSignedQuote) SignedQuoteVenue() Venue { return VenueZerox }
 
 // SignedQuoteVenue implements SignedQuote.
 func (q *ArcusSignedQuote) SignedQuoteVenue() Venue { return VenueArcus }
@@ -480,6 +583,7 @@ func (q *LifiSignedQuote) SignedQuoteVenue() Venue { return VenueLifi }
 // and OrderID are only populated for the arcus venue.
 type SubmitResponse struct {
 	Venue        Venue           `json:"venue"`
+	Details      QuoteDetails    `json:"details"`
 	TxHash       common.Hash     `json:"txHash"`
 	Status       string          `json:"status"` // always "submitted"
 	Maker        *common.Address `json:"maker,omitempty"`
@@ -502,7 +606,7 @@ const (
 
 // StatusRequest is the query for GET /v1/status.
 type StatusRequest struct {
-	Venue   Venue  // one of the supported venues (arcus | rialto | lifi)
+	Venue   Venue  // one of the supported venues (zerox | arcus | rialto | lifi)
 	ID      string // tx hash or order id, 0x-prefixed
 	ChainID uint64 // optional; 0 omits the parameter
 }
@@ -526,6 +630,7 @@ const (
 	TokenCategoryCrypto    TokenCategory = "crypto"
 	TokenCategoryIndex     TokenCategory = "index"
 	TokenCategoryMeme      TokenCategory = "meme"
+	TokenCategoryPToken    TokenCategory = "pToken"
 )
 
 // TokenInfo is one entry of GET /v1/tokens.
@@ -537,6 +642,9 @@ type TokenInfo struct {
 	Decimals int            `json:"decimals"`
 	Source   string         `json:"source"`
 	Category TokenCategory  `json:"category"`
+	// AddedTimestamp is when the token was first listed, unix ms UTC. Absent
+	// for admin-added records that predate tracking.
+	AddedTimestamp *int64 `json:"addedTimestamp,omitempty"`
 	// Verified is true for curated / real-world assets. Every non-meme category
 	// is verified by default; meme tokens start unverified until an admin
 	// promotes them.

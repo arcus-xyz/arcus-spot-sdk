@@ -1,7 +1,24 @@
 import type { Hex, TypedDataDomain } from "viem";
 
-export type SupportedVenue = "arcus" | "rialto" | "lifi";
+export type SupportedVenue = "zerox" | "arcus" | "rialto" | "lifi";
 export type Venue = SupportedVenue | "bebop";
+
+export type RouteHop = {
+  protocol: string;
+  id?: string;
+  feeTier?: number;
+  from?: Hex;
+  to?: Hex;
+};
+
+export type RoutePath = {
+  proportionBps: number;
+  hops: RouteHop[];
+};
+
+export type QuoteDetails = {
+  paths: RoutePath[];
+};
 
 export type HttpError = {
   kind: "timeout" | "network" | "http_4xx" | "http_5xx" | "parse";
@@ -13,6 +30,13 @@ export type ClientOptions = {
   baseUrl: string;
   fetch?: typeof fetch;
   timeoutMs?: number;
+  /**
+   * Router API key, sent as `X-Api-Key` on every request. Issued per client;
+   * keys used from a browser or mobile bundle are publishable identifiers
+   * rather than secrets, and are hardened by per-key origin pinning on the
+   * server. Omit it against a router that is not enforcing keys.
+   */
+  apiKey?: string;
 };
 
 export type PriceRequest = {
@@ -20,17 +44,28 @@ export type PriceRequest = {
   sellToken: string;
   buyToken: string;
   sellAmount: string;
+  /**
+   * Arcus only. Human bps for a builder share. Requires `X-Api-Key`.
+   * Omitted or `0` collects none; `N > 0` must be ≤ the key's max `builderFeeBps`.
+   * Repeat the same value on `/submit` (`ArcusSignedQuote.builderFeeBps`).
+   */
+  builderFeeBps?: number;
 };
 
 export type NormalizedPrice = {
   venue: Venue;
+  details: QuoteDetails;
   buyAmount: string;
   sellAmount: string;
-  raw?: BebopQuoteRaw;
+  fees: RouteFee[];
+  raw?: ZeroxGaslessPriceRaw | BebopQuoteRaw;
 };
 
 export type PriceResponse = {
   recommended: Venue;
+  /** Winning venue. Same value as `recommended`. */
+  venue: Venue;
+  details: QuoteDetails;
   all: NormalizedPrice[];
   errors?: { venue: Venue; error: HttpError }[];
 };
@@ -53,11 +88,121 @@ export type TokenPermission = {
   amount: string;
 };
 
+export type ZeroxQuotePart = {
+  type: string;
+  eip712: Eip712TypedData;
+};
+
+export type ZeroxGaslessApproval = {
+  type: "permit";
+  eip712: Eip712TypedData;
+};
+
+export type ZeroxSlippageAndActions = {
+  recipient: Hex;
+  buyToken: Hex;
+  minAmountOut: string;
+  actions: Hex[];
+};
+
+export type ZeroxPermitWitnessTransferFromMessage = {
+  permitted: TokenPermission;
+  spender: Hex;
+  nonce: string;
+  deadline: string;
+  slippageAndActions: ZeroxSlippageAndActions;
+};
+
+export type ZeroxSettlerMetaTransaction = {
+  type: string;
+  hash?: Hex;
+  eip712: Eip712TypedData & {
+    message: ZeroxPermitWitnessTransferFromMessage;
+  };
+};
+
 export type RouteFee = {
   amount: string;
   token: Hex;
   type: string;
   amountUsd?: number;
+  /** Basis points collected from the buy-token fee leg when known (human; may be tenths e.g. 3.5). Additive; absolute `amount` remains. */
+  bps?: number;
+};
+
+/** Known Arcus `fees[].type` values. Other venues still use free-form strings (`volume`, …). */
+export type ArcusRouteFeeType = "protocol" | "gas" | "builder";
+
+export type ZeroxFee = RouteFee;
+
+export type ZeroxTokenTaxMetadata = {
+  buyTaxBps: string;
+  sellTaxBps: string;
+  transferTaxBps: string;
+};
+
+export type ZeroxGaslessQuoteRaw = {
+  allowanceTarget?: Hex;
+  approval?: ZeroxGaslessApproval | null;
+  blockNumber?: string;
+  buyAmount?: string;
+  buyToken?: Hex;
+  fees?: {
+    integratorFee?: ZeroxFee | null;
+    integratorFees?: ZeroxFee[] | null;
+    zeroExFee?: ZeroxFee | null;
+    gasFee?: ZeroxFee | null;
+  };
+  issues?: {
+    allowance?: unknown | null;
+    balance?: unknown | null;
+    simulationIncomplete?: boolean;
+    invalidSourcesPassed?: string[];
+  };
+  liquidityAvailable?: boolean;
+  minBuyAmount?: string;
+  route?: {
+    fills: {
+      from?: Hex;
+      to?: Hex;
+      source: string;
+      proportionBps: string;
+    }[];
+    tokens?: {
+      address: Hex;
+      symbol: string;
+    }[];
+  };
+  sellAmount?: string;
+  sellToken?: Hex;
+  target?: Hex;
+  tokenMetadata?: {
+    buyToken?: ZeroxTokenTaxMetadata;
+    sellToken?: ZeroxTokenTaxMetadata;
+  };
+  trade?: ZeroxSettlerMetaTransaction;
+  zid?: Hex;
+};
+
+export type ZeroxGaslessPriceRaw = Pick<
+  ZeroxGaslessQuoteRaw,
+  "buyAmount" | "fees" | "liquidityAvailable" | "sellAmount"
+>;
+
+export type ZeroxFirmQuote = {
+  venue: "zerox";
+  details: QuoteDetails;
+  buyAmount: string;
+  sellAmount: string;
+  minBuyAmount?: string;
+  fees: RouteFee[];
+  /** Permit2 PermitWitnessTransferFrom EIP-712 the taker signs for the trade. */
+  toSign?: Eip712TypedData;
+  /** 0x gasless trade payload; some router responses expose this instead of `toSign`. */
+  trade?: ZeroxSettlerMetaTransaction;
+  /** Optional EIP-2612 approval 0x bundles when token→Permit2 allowance is 0. */
+  approval?: ZeroxGaslessApproval | ZeroxQuotePart | null;
+  raw: ZeroxGaslessQuoteRaw;
 };
 
 export type BebopJamOrder = {
@@ -130,6 +275,7 @@ export type BebopQuoteRaw = {
 
 export type BebopFirmQuote = {
   venue: "bebop";
+  details: QuoteDetails;
   buyAmount: string;
   sellAmount: string;
   fees: RouteFee[];
@@ -170,6 +316,7 @@ export type TakerIntentPermit2TypedData = Eip712TypedData & {
 
 export type ArcusFirmQuote = {
   venue: "arcus";
+  details: QuoteDetails;
   buyAmount: string;
   sellAmount: string;
   fees: RouteFee[];
@@ -185,20 +332,119 @@ export type RialtoTx = {
   data: Hex;
   value: string;
   signatureOffset: number;
-  estimatedGas?: string;
+  estimatedGas?: number | string;
+};
+
+export type RialtoSwapWitness = {
+  recipient: Hex;
+  buyToken: Hex;
+  minBuyAmount: string;
+  deadline: number | string;
+  feeRecipient: Hex;
+  srcBps: number;
+  dstBps: number;
+  referralCode: Hex;
+  quoteId: Hex;
+  actionsHash: Hex;
+};
+
+export type RialtoPermitWitnessTransferFromMessage = {
+  permitted: TokenPermission;
+  spender: Hex;
+  nonce: string;
+  deadline: string;
+  witness: RialtoSwapWitness;
+};
+
+export type RialtoTypedData = Eip712TypedData & {
+  primaryType: "PermitWitnessTransferFrom";
+  message: RialtoPermitWitnessTransferFromMessage;
+  owner?: Hex;
+  nonce?: string;
+  deadline?: number | string;
+};
+
+export type RialtoQuoteRaw = {
+  quote_id?: string;
+  settlement?: string;
+  tx?: {
+    to?: Hex;
+    data?: Hex;
+    value?: string;
+    estimated_gas?: number | string;
+    signature_offset?: number;
+  };
+  permit2?: RialtoTypedData | null;
+  chain_id?: number;
+  sell_token?: Hex;
+  buy_token?: Hex;
+  sell_amount?: string;
+  buy_amount?: string;
+  min_buy_amount?: string;
+  platform_fee?: {
+    total_bps?: number | string;
+    fees?: {
+      side?: string;
+      token?: Hex;
+      symbol?: string;
+      decimals?: number;
+      bps?: string;
+      bps_x100?: number;
+      amount?: string;
+      amount_decimal?: string;
+      recipient?: Hex;
+    }[];
+  } | null;
+  integrator_fee?: { bps?: number; recipient?: Hex; id?: string } | null;
+  network_fee?: {
+    token?: Hex;
+    symbol?: string;
+    decimals?: number;
+    gas?: string;
+    gas_price?: string;
+    gas_price_gwei?: string;
+    amount?: string;
+    amount_gwei?: string;
+    amount_eth?: string;
+  };
+  issues?: {
+    allowance?: { actual?: string; spender?: string; token?: Hex } | null;
+    balance?: { token?: Hex; actual?: string; expected?: string } | null;
+    simulationIncomplete?: boolean;
+    invalidSourcesPassed?: string[];
+  };
+  taker?: Hex;
+  slippage_bps?: number;
+  candidate_paths?: number;
+  successful_routes?: number;
+  failed_routes?: number;
+  route?: {
+    sell_amount?: string;
+    buy_amount?: string;
+    gas_estimate?: number | string;
+    legs?: {
+      pool_id?: string;
+      sell_token?: Hex;
+      buy_token?: Hex;
+      sell_amount?: string;
+      buy_amount?: string;
+    }[];
+  };
 };
 
 export type RialtoFirmQuote = {
   venue: "rialto";
+  details: QuoteDetails;
   buyAmount: string;
   sellAmount: string;
   minBuyAmount: string;
   fees: RouteFee[];
   quoteId: string;
-  toSign: Eip712TypedData;
+  toSign: RialtoTypedData;
   tx: RialtoTx;
   /** True when the taker needs a one-time sellToken→Permit2 approval (build a permit). */
   needsAllowance?: boolean;
+  raw: RialtoQuoteRaw;
 };
 
 export type LifiTx = {
@@ -230,10 +476,16 @@ export type LifiQuoteRaw = {
     value?: string;
     gasLimit?: string;
   };
+  includedSteps?: {
+    tool?: string;
+    toolDetails?: { key?: string; name?: string };
+    action?: { fromToken?: { address?: string }; toToken?: { address?: string } };
+  }[];
 };
 
 export type LifiFirmQuote = {
   venue: "lifi";
+  details: QuoteDetails;
   buyAmount: string;
   sellAmount: string;
   minBuyAmount: string;
@@ -246,10 +498,14 @@ export type LifiFirmQuote = {
   raw: LifiQuoteRaw;
 };
 
-export type FirmQuote = BebopFirmQuote | ArcusFirmQuote | RialtoFirmQuote | LifiFirmQuote;
+export type FirmQuote =
+  ZeroxFirmQuote | BebopFirmQuote | ArcusFirmQuote | RialtoFirmQuote | LifiFirmQuote;
 
 export type QuoteResponse = {
   recommended: FirmQuote["venue"];
+  /** Winning venue. Same value as `recommended`. */
+  venue: FirmQuote["venue"];
+  details: QuoteDetails;
   all: FirmQuote[];
   errors?: { venue: Venue; error: HttpError }[];
 };
@@ -276,6 +532,21 @@ export type Permit = {
 };
 
 /**
+ * Body shape POSTed to the router's /v1/submit for the zerox venue. The trade
+ * EIP-712 is the user's PermitWitnessTransferFrom signature
+ */
+export type ZeroxSignedQuote = {
+  venue: "zerox";
+  chainId: number;
+  taker: Hex;
+  typedData: Eip712TypedData;
+  signature: Hex;
+  quotedAmountIn?: string;
+  quotedAmountOut?: string;
+  permits?: Permit[];
+};
+
+/**
  * Body shape POSTed to the router's /v1/submit for the arcus venue. The router
  * forwards it to the aggregator, which runs the maker firm-quote round and
  * broadcasts
@@ -290,6 +561,8 @@ export type ArcusSignedQuote = {
   permits?: Permit[];
   /** Optional discriminator surfaced as bytes32 in the SwapShell event. */
   routeTag?: string;
+  /** Same per-request builder bps as `/price` `/quote` (must be ≤ the key max). */
+  builderFeeBps?: number;
 };
 
 /**
@@ -301,7 +574,7 @@ export type RialtoSignedQuote = {
   venue: "rialto";
   chainId: number;
   taker: Hex;
-  typedData: Eip712TypedData;
+  typedData: RialtoTypedData;
   signature: Hex;
   tx: RialtoTx;
   /** Optional EIP-2612 permit for a first-time sellToken→Permit2 allowance. */
@@ -331,10 +604,11 @@ export type LifiSignedQuote = {
   routeTag?: string;
 };
 
-export type SignedQuote = ArcusSignedQuote | RialtoSignedQuote | LifiSignedQuote;
+export type SignedQuote = ZeroxSignedQuote | ArcusSignedQuote | RialtoSignedQuote | LifiSignedQuote;
 
 export type ArcusSubmitResponse = {
   venue: "arcus";
+  details: QuoteDetails;
   txHash: Hex;
   status: "submitted";
   maker?: Hex;
@@ -343,19 +617,29 @@ export type ArcusSubmitResponse = {
   orderId?: Hex;
 };
 
+export type ZeroxSubmitResponse = {
+  venue: "zerox";
+  details: QuoteDetails;
+  txHash: Hex;
+  status: "submitted";
+};
+
 export type RialtoSubmitResponse = {
   venue: "rialto";
+  details: QuoteDetails;
   txHash: Hex;
   status: "submitted";
 };
 
 export type LifiSubmitResponse = {
   venue: "lifi";
+  details: QuoteDetails;
   txHash: Hex;
   status: "submitted";
 };
 
-export type SubmitResponse = ArcusSubmitResponse | RialtoSubmitResponse | LifiSubmitResponse;
+export type SubmitResponse =
+  ArcusSubmitResponse | ZeroxSubmitResponse | RialtoSubmitResponse | LifiSubmitResponse;
 
 export type NormalizedStatus = "pending" | "submitted" | "confirmed" | "failed" | "unknown";
 
@@ -373,7 +657,7 @@ export type StatusResponse = {
   raw: unknown;
 };
 
-export type TokenCategory = "stock" | "commodity" | "crypto" | "index" | "meme";
+export type TokenCategory = "stock" | "commodity" | "crypto" | "index" | "meme" | "pToken";
 
 export type TokenInfo = {
   chainId: number;
@@ -383,6 +667,11 @@ export type TokenInfo = {
   decimals: number;
   source: string;
   category: TokenCategory;
+  /**
+   * When the token was first listed, unix ms UTC. Absent for admin-added
+   * records that predate tracking.
+   */
+  addedTimestamp?: number;
   /**
    * True for curated / real-world assets. Every non-meme category is verified by
    * default; meme tokens start unverified until an admin promotes them.

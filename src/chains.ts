@@ -16,7 +16,9 @@ export type ChainDeployments = {
   permit2: Address;
   swapShell: Address;
   arcusSettlement?: Address;
+  arcusRfqExecutor?: Address;
   arcusWrappedEscrow?: Address;
+  arcusWrappedExecutor?: Address;
   arcusWrappedTokenFactory?: Address;
   arcusWrappedTokenBeacon?: Address;
   /** Rialto venue router (`SwapExecuted.router` for routeTag "RIALTO"). */
@@ -43,7 +45,9 @@ export const ROBINHOOD_MAINNET_DEPLOYMENTS = {
   permit2: PERMIT2_ADDRESS,
   swapShell: "0x4262efBd176F02824af27010bEa218429c33c7E8",
   arcusSettlement: "0x006102b16A04c20306A28b652745D3973D7D24fa",
+  arcusRfqExecutor: "0xf4da3c42D9c9F494d4688A0112a9DB3C9b18a914",
   arcusWrappedEscrow: "0x6d56Ab475069B7E93886b3D3F06c5435B87Ba158",
+  arcusWrappedExecutor: "0x43cF43056C33128329B54F66CA3649CF2975f1A6",
   arcusWrappedTokenFactory: "0x8bc71aE8EaC8B25F30c2990930Cc3A80E72e169e",
   arcusWrappedTokenBeacon: "0x27fEB332759F8d2f351D7fC72D29af37664ffd77",
   rialtoRouter: "0xC94135b63772b91D79d0A2DaAb2a8801f32359bD",
@@ -57,7 +61,9 @@ export const ROBINHOOD_TESTNET_DEPLOYMENTS = {
   permit2: PERMIT2_ADDRESS,
   swapShell: "0x528B30910B3ef5a615cDC3847F273947dc474519",
   arcusSettlement: "0xE8D8b187754D8a5Ca4Ea4E77Cd01506f9332A773",
+  arcusRfqExecutor: "0x38Cebc5F641d3A0dd39969B0B75937d267dA0D85",
   arcusWrappedEscrow: "0x391747585Caebd163D2D0B980B79B0Ba312A5742",
+  arcusWrappedExecutor: "0x9956eb7C004d51e29a51f1C68be8e198A1DCFA5d",
   arcusWrappedTokenFactory: "0xF361dD4cd631175648f54B657d44A3128903D92c",
   arcusWrappedTokenBeacon: "0xDd70cD7BbE53ac3d67c1959C9De84423f5Bf2bca",
 } as const satisfies ChainDeployments;
@@ -87,7 +93,9 @@ export function getSettlementSourceAddresses(chainId: number): readonly Address[
   const sources: (Address | undefined)[] = [
     deployments.swapShell,
     deployments.arcusSettlement,
+    deployments.arcusRfqExecutor,
     deployments.arcusWrappedEscrow,
+    deployments.arcusWrappedExecutor,
     deployments.rialtoRouter,
     deployments.lifiPermit2Proxy,
     deployments.zeroexRouter,

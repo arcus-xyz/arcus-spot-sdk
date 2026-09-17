@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,18 +26,27 @@ type ClientOptions struct {
 	HTTPClient *http.Client
 	// Timeout bounds each request; defaults to DefaultTimeout.
 	Timeout time.Duration
+	// APIKey is sent as X-Api-Key on every request.
+	APIKey string
 }
 
 // SpotRouterError is returned for failed router requests. Status is zero for
 // transport-level failures (no HTTP response).
 type SpotRouterError struct {
-	Message string
-	Status  int
-	Body    any
+	Message   string
+	Status    int
+	Body      any
+	Method    string
+	URL       string
+	Timeout   time.Duration
+	Cause     error
 }
 
 // Error implements error.
 func (e *SpotRouterError) Error() string { return e.Message }
+
+// Unwrap returns the underlying transport cause, if any.
+func (e *SpotRouterError) Unwrap() error { return e.Cause }
 
 // SpotRouterClient talks to the spot router HTTP API. All endpoints except
 // Health live under /v1; the client normalizes BaseURL either way.
@@ -47,6 +57,7 @@ type SpotRouterClient struct {
 	apiBaseURL string
 	httpClient *http.Client
 	timeout    time.Duration
+	apiKey     string
 }
 
 // NewSpotRouterClient validates and normalizes options.BaseURL and returns a
@@ -74,6 +85,7 @@ func NewSpotRouterClient(options ClientOptions) (*SpotRouterClient, error) {
 		apiBaseURL: apiBaseURL,
 		httpClient: httpClient,
 		timeout:    timeout,
+		apiKey:     options.APIKey,
 	}, nil
 }
 
@@ -172,6 +184,9 @@ func addPriceParams(params url.Values, request PriceRequest) {
 	params.Set("sellToken", request.SellToken)
 	params.Set("buyToken", request.BuyToken)
 	params.Set("sellAmount", request.SellAmount)
+	if request.BuilderFeeBps != nil {
+		params.Set("builderFeeBps", strconv.Itoa(*request.BuilderFeeBps))
+	}
 }
 
 func (c *SpotRouterClient) getJSON(ctx context.Context, rawURL string, out any) error {
@@ -188,21 +203,48 @@ func (c *SpotRouterClient) requestJSON(ctx context.Context, method, rawURL strin
 	}
 	request, err := http.NewRequestWithContext(ctx, method, rawURL, reader)
 	if err != nil {
-		return &SpotRouterError{Message: fmt.Sprintf("Router request failed: %v", err)}
+		return &SpotRouterError{
+			Message: fmt.Sprintf("Router request failed: %v (%s %s)", err, method, rawURL),
+			Method:  method,
+			URL:     rawURL,
+			Timeout: c.timeout,
+			Cause:   err,
+		}
 	}
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
+	if c.apiKey != "" {
+		request.Header.Set("X-Api-Key", c.apiKey)
+	}
 
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		return &SpotRouterError{Message: fmt.Sprintf("Router request failed: %v", err)}
+		reason := err.Error()
+		root := ""
+		if errors.Is(err, context.DeadlineExceeded) || ctx.Err() == context.DeadlineExceeded {
+			reason = fmt.Sprintf("timed out after %s", c.timeout)
+			root = fmt.Sprintf(" [%T: %v]", err, err)
+		}
+		return &SpotRouterError{
+			Message: fmt.Sprintf("Router request failed: %s (%s %s)%s", reason, method, rawURL, root),
+			Method:  method,
+			URL:     rawURL,
+			Timeout: c.timeout,
+			Cause:   err,
+		}
 	}
 	defer response.Body.Close()
 
 	text, err := io.ReadAll(response.Body)
 	if err != nil {
-		return &SpotRouterError{Message: fmt.Sprintf("Router request failed: %v", err)}
+		return &SpotRouterError{
+			Message: fmt.Sprintf("Router request failed: %v (%s %s)", err, method, rawURL),
+			Method:  method,
+			URL:     rawURL,
+			Timeout: c.timeout,
+			Cause:   err,
+		}
 	}
 
 	var parsedBody any
@@ -215,7 +257,14 @@ func (c *SpotRouterClient) requestJSON(ctx context.Context, method, rawURL strin
 		if message == "" {
 			message = fmt.Sprintf("Router request failed with %d", response.StatusCode)
 		}
-		return &SpotRouterError{Message: message, Status: response.StatusCode, Body: parsedBody}
+		return &SpotRouterError{
+			Message: message,
+			Status:  response.StatusCode,
+			Body:    parsedBody,
+			Method:  method,
+			URL:     rawURL,
+			Timeout: c.timeout,
+		}
 	}
 
 	if out == nil || len(text) == 0 {

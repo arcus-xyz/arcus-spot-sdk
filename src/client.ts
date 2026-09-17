@@ -14,20 +14,67 @@ import type {
 export class SpotRouterError extends Error {
   readonly status: number | undefined;
   readonly body: unknown;
+  readonly method: string | undefined;
+  readonly url: string | undefined;
+  readonly timeoutMs: number | undefined;
 
-  constructor(message: string, options: { status?: number; body?: unknown } = {}) {
-    super(message);
+  constructor(
+    message: string,
+    options: {
+      status?: number;
+      body?: unknown;
+      method?: string;
+      url?: string;
+      timeoutMs?: number;
+      cause?: unknown;
+    } = {},
+  ) {
+    super(message, options.cause !== undefined ? { cause: options.cause } : undefined);
     this.name = "SpotRouterError";
     this.status = options.status;
     this.body = options.body;
+    this.method = options.method;
+    this.url = options.url;
+    this.timeoutMs = options.timeoutMs;
+  }
+
+  toJSON(): {
+    name: string;
+    message: string;
+    status: number | undefined;
+    body: unknown;
+    method: string | undefined;
+    url: string | undefined;
+    timeoutMs: number | undefined;
+    causeName: string | undefined;
+    causeMessage: string | undefined;
+  } {
+    const cause = this.cause;
+    return {
+      name: this.name,
+      message: this.message,
+      status: this.status,
+      body: this.body,
+      method: this.method,
+      url: this.url,
+      timeoutMs: this.timeoutMs,
+      causeName: cause instanceof Error ? cause.name : undefined,
+      causeMessage:
+        cause instanceof Error ? cause.message : cause != null ? String(cause) : undefined,
+    };
   }
 }
+
+// Narrower than RequestInit so headers stay a plain record the client can merge
+// the API key into.
+type JsonRequestInit = Omit<RequestInit, "headers"> & { headers?: Record<string, string> };
 
 export class SpotRouterClient {
   readonly baseUrl: string;
   private readonly apiBaseUrl: string;
   private readonly fetchFn: typeof fetch;
   private readonly timeoutMs: number;
+  private readonly apiKey: string | undefined;
 
   constructor(options: ClientOptions) {
     this.baseUrl = withoutApiVersion(options.baseUrl.replace(/\/+$/, ""));
@@ -35,6 +82,7 @@ export class SpotRouterClient {
     const defaultFetch = globalThis.fetch?.bind(globalThis);
     this.fetchFn = options.fetch ?? defaultFetch;
     this.timeoutMs = options.timeoutMs ?? 15_000;
+    this.apiKey = options.apiKey;
 
     if (!this.fetchFn) {
       throw new SpotRouterError("No fetch implementation available");
@@ -109,7 +157,7 @@ export class SpotRouterClient {
 
   private async requestJson<T>(
     pathOrUrl: string | URL,
-    init: RequestInit,
+    init: JsonRequestInit,
     baseUrl: string,
   ): Promise<T> {
     const controller = new AbortController();
@@ -117,15 +165,35 @@ export class SpotRouterClient {
     const url =
       typeof pathOrUrl === "string" ? new URL(relativePath(pathOrUrl), `${baseUrl}/`) : pathOrUrl;
 
+    const method = (init.method ?? "GET").toUpperCase();
+    const requestUrl = url.toString();
+
     let response: Response;
     try {
       response = await this.fetchFn(url, {
         ...init,
+        headers: {
+          ...init.headers,
+          ...(this.apiKey ? { "X-Api-Key": this.apiKey } : {}),
+        },
         signal: controller.signal,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new SpotRouterError(`Router request failed: ${message}`);
+      const aborted =
+        controller.signal.aborted || (error instanceof Error && error.name === "AbortError");
+      const causeName = error instanceof Error ? error.name : undefined;
+      const causeMessage = error instanceof Error ? error.message : String(error);
+      const reason = aborted ? `timed out after ${this.timeoutMs}ms` : causeMessage;
+      const root = aborted && causeMessage ? ` [${causeName ?? "Error"}: ${causeMessage}]` : "";
+      throw new SpotRouterError(
+        `Router request failed: ${reason} (${method} ${requestUrl})${root}`,
+        {
+          method,
+          url: requestUrl,
+          timeoutMs: this.timeoutMs,
+          cause: error,
+        },
+      );
     } finally {
       clearTimeout(timer);
     }
@@ -135,7 +203,13 @@ export class SpotRouterClient {
 
     if (!response.ok) {
       const message = routerErrorMessage(body) ?? `Router request failed with ${response.status}`;
-      throw new SpotRouterError(message, { status: response.status, body });
+      throw new SpotRouterError(message, {
+        status: response.status,
+        body,
+        method,
+        url: requestUrl,
+        timeoutMs: this.timeoutMs,
+      });
     }
 
     return body as T;

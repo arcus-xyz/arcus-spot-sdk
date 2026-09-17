@@ -152,12 +152,31 @@ type QuoteSigningTask struct {
 	TypedData *Eip712TypedData
 }
 
-// GetQuoteSigningTasks lists the signatures a firm quote requires. Every venue
-// currently needs exactly one trade signature.
+// GetQuoteSigningTasks lists the signatures a firm quote requires. 0x quotes
+// may also need an EIP-2612 approval signature.
 func GetQuoteSigningTasks(quote FirmQuote) []QuoteSigningTask {
+	if zerox, ok := quote.(*ZeroxFirmQuote); ok {
+		return zeroxSigningTasks(zerox)
+	}
 	return []QuoteSigningTask{
 		{Venue: quote.FirmQuoteVenue(), Kind: "trade", TypedData: quote.TradeTypedData()},
 	}
+}
+
+func zeroxSigningTasks(quote *ZeroxFirmQuote) []QuoteSigningTask {
+	var tasks []QuoteSigningTask
+	if quote.Approval != nil {
+		tasks = append(tasks, QuoteSigningTask{
+			Venue:     VenueZerox,
+			Kind:      "approval",
+			TypedData: &quote.Approval.EIP712,
+		})
+	}
+	typedData := quote.TradeTypedData()
+	if typedData == nil {
+		return tasks
+	}
+	return append(tasks, QuoteSigningTask{Venue: VenueZerox, Kind: "trade", TypedData: typedData})
 }
 
 // SignQuoteOptions tunes SignQuote.
@@ -168,6 +187,9 @@ type SignQuoteOptions struct {
 	// Permits optionally folds EIP-2612 permits into the submit body for a
 	// first-time sellToken→Permit2 allowance.
 	Permits []Permit
+	// BuilderFeeBps is Arcus-only. Echo the /quote builderFeeBps onto the
+	// submit body so settlement matches the quoted fee plan.
+	BuilderFeeBps *int
 }
 
 // SignQuote signs a firm quote's trade payload and assembles the venue-specific
@@ -189,6 +211,8 @@ func SignQuote(quote FirmQuote, signer TypedDataSigner, options *SignQuoteOption
 	}
 
 	switch q := quote.(type) {
+	case *ZeroxFirmQuote:
+		return signZeroxQuote(q, signer, taker)
 	case *ArcusFirmQuote:
 		return signArcusQuote(q, signer, taker, options)
 	case *RialtoFirmQuote:
@@ -210,12 +234,76 @@ func signArcusQuote(quote *ArcusFirmQuote, signer TypedDataSigner, taker common.
 		return nil, err
 	}
 	return &ArcusSignedQuote{
-		Venue:     VenueArcus,
-		ChainID:   chainID,
-		Taker:     taker,
-		TypedData: quote.ToSign,
-		Signature: signature,
-		Permits:   options.Permits,
+		Venue:         VenueArcus,
+		ChainID:       chainID,
+		Taker:         taker,
+		TypedData:     quote.ToSign,
+		Signature:     signature,
+		Permits:       options.Permits,
+		BuilderFeeBps: options.BuilderFeeBps,
+	}, nil
+}
+
+func signZeroxQuote(quote *ZeroxFirmQuote, signer TypedDataSigner, taker common.Address) (*ZeroxSignedQuote, error) {
+	typedData := quote.TradeTypedData()
+	if typedData == nil {
+		return nil, errors.New("arcusspot: 0x quote is missing trade typed data")
+	}
+	signature, err := signer.SignTypedData(*typedData)
+	if err != nil {
+		return nil, err
+	}
+	chainID, err := typedDataChainID(typedData)
+	if err != nil {
+		return nil, err
+	}
+
+	var permits []Permit
+	if quote.Approval != nil {
+		approvalSig, err := signer.SignTypedData(quote.Approval.EIP712)
+		if err != nil {
+			return nil, err
+		}
+		permit, err := permitFromApproval(approvalSig, quote.Approval.EIP712)
+		if err != nil {
+			return nil, err
+		}
+		permits = []Permit{permit}
+	}
+
+	return &ZeroxSignedQuote{
+		Venue:           VenueZerox,
+		ChainID:         chainID,
+		Taker:           taker,
+		TypedData:       *typedData,
+		Signature:       signature,
+		QuotedAmountIn:  quote.SellAmount,
+		QuotedAmountOut: quote.BuyAmount,
+		Permits:         permits,
+	}, nil
+}
+
+func permitFromApproval(signature []byte, typedData Eip712TypedData) (Permit, error) {
+	split, err := SplitSignatureBytes(signature)
+	if err != nil {
+		return Permit{}, err
+	}
+	token := typedData.Domain.VerifyingContract
+	if !common.IsHexAddress(token) {
+		return Permit{}, errors.New("arcusspot: EIP-2612 approval missing verifyingContract (token address)")
+	}
+	value := typedData.Message["value"]
+	deadline := typedData.Message["deadline"]
+	if value == nil || deadline == nil {
+		return Permit{}, errors.New("arcusspot: EIP-2612 approval message missing value/deadline")
+	}
+	return Permit{
+		Token:    common.HexToAddress(token),
+		Value:    fmt.Sprint(value),
+		Deadline: fmt.Sprint(deadline),
+		V:        split.V,
+		R:        split.R,
+		S:        split.S,
 	}, nil
 }
 
@@ -295,16 +383,31 @@ func typedDataChainID(typedData *Eip712TypedData) (uint64, error) {
 }
 
 // inferTaker mirrors the TS SDK: arcus binds the taker in witness.taker, rialto
-// in witness.recipient, and other venues in the top-level owner field.
+// in witness.recipient, 0x in approval.owner or slippageAndActions.recipient,
+// and other venues in the top-level owner field.
 func inferTaker(quote FirmQuote) common.Address {
-	message := quote.TradeTypedData().Message
+	if zerox, ok := quote.(*ZeroxFirmQuote); ok {
+		if zerox.Approval != nil {
+			if owner := addressAtPath(zerox.Approval.EIP712.Message, "owner"); owner != (common.Address{}) {
+				return owner
+			}
+		}
+	}
+	typedData := quote.TradeTypedData()
+	if typedData == nil {
+		return common.Address{}
+	}
+	message := typedData.Message
 	switch quote.FirmQuoteVenue() {
 	case VenueArcus:
 		return addressAtPath(message, "witness", "taker")
 	case VenueRialto:
 		return addressAtPath(message, "witness", "recipient")
 	default:
-		return addressAtPath(message, "owner")
+		if owner := addressAtPath(message, "owner"); owner != (common.Address{}) {
+			return owner
+		}
+		return addressAtPath(message, "slippageAndActions", "recipient")
 	}
 }
 

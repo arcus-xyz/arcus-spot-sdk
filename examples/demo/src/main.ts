@@ -156,6 +156,10 @@ app.innerHTML = `
               </select>
               <input id="baseUrl" class="hidden" placeholder="https://router.example.com/v1" />
             </div>
+            <div class="field">
+              <label for="apiKey">API key (optional)</label>
+              <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="arc_…" />
+            </div>
             <div class="pair">
               <div class="field">
                 <label for="chainId">chain ID</label>
@@ -173,11 +177,16 @@ app.innerHTML = `
                 <option value="lifi">lifi</option>
                 <option value="arcus">arcus</option>
                 <option value="rialto">rialto</option>
+                <option value="zerox">zerox</option>
               </select>
             </div>
             <div class="field">
               <label for="slippageBps">slippage bps</label>
               <input id="slippageBps" value="50" />
+            </div>
+            <div class="field">
+              <label for="builderFeeBps">builder fee bps (arcus; blank = none)</label>
+              <input id="builderFeeBps" placeholder="0" />
             </div>
             <div class="field">
               <label for="intentTtlSec">arcus intent TTL (s)</label>
@@ -338,6 +347,7 @@ app.innerHTML = `
 
 const els = {
   account: must<HTMLElement>("account"),
+  apiKey: must<HTMLInputElement>("apiKey"),
   baseUrl: must<HTMLInputElement>("baseUrl"),
   baseUrlPreset: must<HTMLSelectElement>("baseUrlPreset"),
   buyPreset: must<HTMLSelectElement>("buyPreset"),
@@ -362,6 +372,7 @@ const els = {
   sellToken: must<HTMLInputElement>("sellToken"),
   signedOut: must<HTMLElement>("signedOut"),
   slippageBps: must<HTMLInputElement>("slippageBps"),
+  builderFeeBps: must<HTMLInputElement>("builderFeeBps"),
   intentTtlSec: must<HTMLInputElement>("intentTtlSec"),
   allowWrapped: must<HTMLInputElement>("allowWrapped"),
   statusOut: must<HTMLElement>("statusOut"),
@@ -419,7 +430,12 @@ document.querySelectorAll<HTMLButtonElement>("[data-copy-target]").forEach((butt
 });
 
 function client(): SpotRouterClient {
-  return new SpotRouterClient({ baseUrl: routerBaseUrl(), timeoutMs: 90_000 });
+  const apiKey = els.apiKey.value.trim();
+  return new SpotRouterClient({
+    baseUrl: routerBaseUrl(),
+    timeoutMs: 90_000,
+    ...(apiKey ? { apiKey } : {}),
+  });
 }
 
 function routerBaseUrl(): string {
@@ -609,9 +625,11 @@ async function signCurrentQuote(): Promise<void> {
     state.selectedQuote.toSign.message.witness.deadline = deadline;
   }
 
+  const requestedBuilderFeeBps = builderFeeBps();
   const signed = await signQuote(state.selectedQuote, state.walletClient, {
     taker: taker(),
     ...(permits ? { permits } : {}),
+    ...(requestedBuilderFeeBps != null ? { builderFeeBps: requestedBuilderFeeBps } : {}),
   });
   state.signedQuote = signed;
   els.submit.disabled = false;
@@ -750,14 +768,22 @@ function quoteInputs() {
   };
 }
 
+function builderFeeBps(): number | undefined {
+  const raw = els.builderFeeBps.value.trim();
+  if (!raw) return undefined;
+  return Number(raw);
+}
+
 function priceInputs() {
   const decimals = Number(els.sellDecimals.value);
   const amount = parseUnits(els.sellAmount.value, decimals).toString();
+  const bps = builderFeeBps();
   return {
     chainId: chainId(),
     sellToken: els.sellToken.value.trim(),
     buyToken: els.buyToken.value.trim(),
     sellAmount: amount,
+    ...(bps != null ? { builderFeeBps: bps } : {}),
   };
 }
 

@@ -1,6 +1,6 @@
 # @arcus-xyz/arcus-spot-sdk
 
-TypeScript SDK for the Arcus spot router server. It wraps the router HTTP API and provides a viem-first signing flow for firm quotes routed through SwapShell — **Arcus RFQ**, **Rialto**, and **LI.FI** venues on Robinhood mainnet (4663) and testnet (46630).
+TypeScript SDK for the Arcus spot router server. It wraps the router HTTP API and provides a viem-first signing flow for firm quotes routed through SwapShell — **Arcus RFQ**, **Rialto**, **LI.FI**, and **0x Gasless** venues on Robinhood mainnet (4663) and testnet (46630).
 
 `viem` is the only runtime dependency (a peer dependency); the SDK ships no other runtime deps.
 
@@ -25,6 +25,23 @@ Public router deployments are available — no local setup or API key is needed 
 | Robinhood testnet | `https://router.spot.testnet.arcus.xyz/v1` | 46630    | arcus               |
 
 Verify either with the unversioned health endpoint, e.g. `curl https://router.spot.arcus.xyz/health` → `{"ok":true,"chainId":4663,...}`. Self-hosted routers (e.g. `http://localhost:8787/v1`) work the same way — every example below accepts either base URL.
+
+## Authentication
+
+The router may gate its endpoints with an API key. Pass the key issued for your
+integration and the client sends it as `X-Api-Key` on every request:
+
+```ts
+const client = new SpotRouterClient({
+  baseUrl: "https://router.spot.arcus.xyz/v1",
+  apiKey: "arc_…",
+});
+```
+
+Keys shipped in a browser or mobile bundle are publishable identifiers rather
+than secrets — the server hardens browser keys by pinning them to specific
+origins, so use a separate key per client. `apiKey` is optional and can be
+omitted against a router that is not enforcing keys.
 
 ## Usage
 
@@ -100,7 +117,31 @@ if (submitResponse.venue === "arcus") {
 
 The SDK accepts the versioned API base URL, for example `http://localhost:8787/v1`, and calls endpoints like `/quote`, `/price`, `/submit`, `/status`, and `/tokens` relative to it. `health()` remains unversioned at `/health`.
 
-Every firm quote includes `fees`, a normalized route-fee array with `amount` in atoms and `token` as the fee token address. Venues with no reported fee return an empty array; Bebop gas/native fees may include `amountUsd` to show the USD value of the fees.
+Every `/price` entry and firm quote includes `fees`, a normalized route-fee array with `amount` in atoms and `token` as the fee token address. Venues with no reported fee return an empty array; Bebop gas/native fees may include `amountUsd` to show the USD value of the fees. When the router knows the proportional rate, entries may also include `bps` (human basis points; tenths are allowed, e.g. `3.5`).
+
+`buyAmount` is already net of fees — display it as the amount the user keeps and do not subtract `fees[]` again. Map fee `type` values for UI as follows: `protocol` → **Platform Fee**, `gas` → **Network Fee**, `builder` → **Builder Fee** (0x `volume` fees are integrator/platform fees).
+
+`/price` and `/quote` also echo `venue` (same as `recommended`) and `details.paths` (route hops). Use `quotes.details` for the winning route and `quote.details` for each candidate.
+
+### Arcus builder fees
+
+Authenticated callers (`apiKey` / `X-Api-Key`) may pass `builderFeeBps` on `/price` and `/quote`. Omitted or `0` collects none. `N > 0` must be ≤ the key's max (admin `builderFeeBps`) and pays the key's `builderFeeRecipient`. Repeat the same value on `/submit` — pass it to `signQuote` so it lands on `ArcusSignedQuote`:
+
+```ts
+const quotes = await client.getQuote({
+  chainId: ROBINHOOD_TESTNET_CHAIN_ID,
+  sellToken: "0xf64780eAE9CFe162EF38f5224459a014a1007cd5",
+  buyToken: "0x01206fc62E2e88df71cE4b591e93Bb203383482B",
+  sellAmount: "10000000",
+  taker: "0xYourWallet",
+  slippageBps: 50,
+  builderFeeBps: 80,
+});
+const signed = await signQuote(quote, walletClient, { builderFeeBps: 80 });
+await client.submitSignedQuote(signed);
+```
+
+Router errors: `INVALID_BUILDER_FEE_BPS`, `BUILDER_FEE_REQUIRES_API_KEY`, `BUILDER_FEE_EXCEEDS_MAX`. Combined protocol + builder proportional rate is also capped.
 
 Example `quote.fees` from a firm quote:
 
@@ -119,6 +160,19 @@ Example `quote.fees` from a firm quote:
 ]
 ```
 
+Example Arcus `/price` fee entry:
+
+```json
+[
+  {
+    "amount": "500",
+    "token": "0x00000000000000000000000000000000000000aa",
+    "type": "protocol",
+    "bps": 5
+  }
+]
+```
+
 ## Chain deployments and token list
 
 Onchain addresses are bundled per chain (published with ABIs in [`arcus-xyz/spot-contracts-abis`](https://github.com/arcus-xyz/spot-contracts-abis)):
@@ -133,7 +187,7 @@ import {
 } from "@arcus-xyz/arcus-spot-sdk";
 
 const deployments = getChainDeployments(ROBINHOOD_TESTNET_CHAIN_ID);
-// deployments.swapShell, .arcusSettlement,
+// deployments.swapShell, .arcusSettlement, .arcusRfqExecutor,
 // .arcusWrappedTokenFactory, .arcusWrappedTokenBeacon, ...
 
 getSwapShellAddress(46630); // => ROBINHOOD_TESTNET_DEPLOYMENTS.swapShell
