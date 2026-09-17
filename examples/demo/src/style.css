@@ -262,6 +262,83 @@ select {
   gap: 8px;
 }
 
+.swap-row {
+  display: flex;
+  justify-content: center;
+}
+
+.swap-row button {
+  width: auto;
+  min-width: 88px;
+}
+
+.token-combobox {
+  position: relative;
+}
+
+.token-options {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 2px);
+  right: 0;
+  left: 0;
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid #303036;
+  border-radius: 4px;
+  padding: 4px;
+  background: #17171a;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+}
+
+.token-option {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  border: 0;
+  border-radius: 3px;
+  padding: 6px 8px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.token-option:hover,
+.token-option.is-active {
+  background: #2f2f35;
+}
+
+.token-option strong {
+  color: #f0f0f2;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.token-option small {
+  color: #8f8f98;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.token-option-empty {
+  padding: 8px;
+  color: #8f8f98;
+  font-size: 11px;
+}
+
+.cache-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #c6c9d1;
+  font-size: 12px;
+}
+
+.cache-toggle input {
+  width: auto;
+}
+
 .panels {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

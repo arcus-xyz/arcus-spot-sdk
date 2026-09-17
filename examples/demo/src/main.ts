@@ -60,6 +60,35 @@ type State = {
 };
 
 const DEFAULT_ARCUS_INTENT_TTL_SEC = 300;
+const SETTINGS_CACHE_KEY = "arcus-spot-sdk-demo-settings";
+const LOAD_SETTINGS_PREF_KEY = "arcus-spot-sdk-demo-load-settings";
+
+type CachedSettings = {
+  version: 1;
+  sellToken: string;
+  buyToken: string;
+  sellDecimals: string;
+  sellAmount: string;
+  baseUrlPreset: string;
+  baseUrl: string;
+  apiKey: string;
+  chainId: string;
+  taker: string;
+  preferredVenue: string;
+  slippageBps: string;
+  builderFeeBps: string;
+  intentTtlSec: string;
+  allowWrapped: boolean;
+  logsRpcUrl: string;
+  swapShell: string;
+  logsTaker: string;
+  logsFromBlock: string;
+  logsToBlock: string;
+  logsTokenIn: string;
+  logsTokenOut: string;
+};
+
+type TokenSide = "sell" | "buy";
 
 // Default sell/buy symbols surfaced when the selected chain changes.
 const DEFAULT_PAIR_BY_CHAIN_ID: Readonly<Record<number, { sell: string; buy: string }>> = {
@@ -111,22 +140,29 @@ app.innerHTML = `
         <section class="section">
           <h2>Step 2 / Token Pair</h2>
           <div class="fields">
-            <div class="pair">
-              <div class="field">
-                <label for="sellPreset">sell preset</label>
-                <select id="sellPreset"></select>
+            <div class="field">
+              <label for="sellPreset">sell token</label>
+              <div class="token-combobox">
+                <input id="sellPreset" autocomplete="off" spellcheck="false" placeholder="type to search tokens" />
+                <div id="sellPresetList" class="token-options hidden" role="listbox"></div>
               </div>
-              <div class="field">
-                <label for="buyPreset">buy preset</label>
-                <select id="buyPreset"></select>
+            </div>
+            <div class="swap-row">
+              <button type="button" id="swapTokens" title="swap buy and sell tokens">⇅ swap</button>
+            </div>
+            <div class="field">
+              <label for="buyPreset">buy token</label>
+              <div class="token-combobox">
+                <input id="buyPreset" autocomplete="off" spellcheck="false" placeholder="type to search tokens" />
+                <div id="buyPresetList" class="token-options hidden" role="listbox"></div>
               </div>
             </div>
             <div class="field">
-              <label for="sellToken">sell token</label>
+              <label for="sellToken">sell token address</label>
               <input id="sellToken" />
             </div>
             <div class="field">
-              <label for="buyToken">buy token</label>
+              <label for="buyToken">buy token address</label>
               <input id="buyToken" />
             </div>
             <div class="pair">
@@ -204,6 +240,12 @@ app.innerHTML = `
         <section class="section utility-section">
           <h2>Utilities</h2>
           <div class="fields">
+            <label class="cache-toggle" for="loadCachedSettings">
+              <input type="checkbox" id="loadCachedSettings" />
+              load settings from browser cache
+            </label>
+            <button type="button" id="loadCachedSettingsBtn">Load settings from browser cache</button>
+            <p class="note">Form values save in this browser. Check the box to restore them when the page opens.</p>
             <button id="checkHealth">GET /health</button>
             <button id="loadTokens">GET /tokens</button>
             <button id="fetchPrice">GET /price</button>
@@ -350,7 +392,8 @@ const els = {
   apiKey: must<HTMLInputElement>("apiKey"),
   baseUrl: must<HTMLInputElement>("baseUrl"),
   baseUrlPreset: must<HTMLSelectElement>("baseUrlPreset"),
-  buyPreset: must<HTMLSelectElement>("buyPreset"),
+  buyPreset: must<HTMLInputElement>("buyPreset"),
+  buyPresetList: must<HTMLElement>("buyPresetList"),
   buyToken: must<HTMLInputElement>("buyToken"),
   chainId: must<HTMLInputElement>("chainId"),
   health: must<HTMLElement>("health"),
@@ -368,7 +411,9 @@ const els = {
   runStatus: must<HTMLElement>("runStatus"),
   sellAmount: must<HTMLInputElement>("sellAmount"),
   sellDecimals: must<HTMLInputElement>("sellDecimals"),
-  sellPreset: must<HTMLSelectElement>("sellPreset"),
+  loadCachedSettings: must<HTMLInputElement>("loadCachedSettings"),
+  sellPreset: must<HTMLInputElement>("sellPreset"),
+  sellPresetList: must<HTMLElement>("sellPresetList"),
   sellToken: must<HTMLInputElement>("sellToken"),
   signedOut: must<HTMLElement>("signedOut"),
   slippageBps: must<HTMLInputElement>("slippageBps"),
@@ -386,9 +431,26 @@ const els = {
   preferredVenue: must<HTMLSelectElement>("preferredVenue"),
 };
 
+const tokenPicker = {
+  sell: { input: els.sellPreset, list: els.sellPresetList, open: false, activeIndex: -1 },
+  buy: { input: els.buyPreset, list: els.buyPresetList, open: false, activeIndex: -1 },
+};
+
+let applyingCachedSettings = false;
+let saveSettingsTimer: number | null = null;
+
 renderBaseUrlInput();
 renderTokenOptions();
-void runAction("load tokens", () => loadServerTokens(false), { quiet: true });
+els.loadCachedSettings.checked = readLoadSettingsPref();
+if (els.loadCachedSettings.checked) applyCachedSettings(false);
+void runAction(
+  "load tokens",
+  async () => {
+    await loadServerTokens(false);
+    if (els.loadCachedSettings.checked) applyCachedSettings(false);
+  },
+  { quiet: true },
+);
 
 must<HTMLButtonElement>("connect").addEventListener(
   "click",
@@ -420,11 +482,29 @@ must<HTMLButtonElement>("lookupLogs").addEventListener(
 els.sign.addEventListener("click", () => void runAction("sign", signCurrentQuote));
 els.submit.addEventListener("click", () => void runAction("submit", submitCurrentQuote));
 els.poll.addEventListener("click", () => void runAction("poll status", pollStatus));
-els.sellPreset.addEventListener("change", () => applyPreset("sell"));
-els.buyPreset.addEventListener("change", () => applyPreset("buy"));
+must<HTMLButtonElement>("swapTokens").addEventListener("click", swapSellAndBuyTokens);
+must<HTMLButtonElement>("loadCachedSettingsBtn").addEventListener("click", () => {
+  applyCachedSettings(true);
+});
+els.loadCachedSettings.addEventListener("change", () => {
+  writeLoadSettingsPref(els.loadCachedSettings.checked);
+  if (els.loadCachedSettings.checked) applyCachedSettings(true);
+});
+bindTokenPicker("sell");
+bindTokenPicker("buy");
 els.quoteSelect.addEventListener("change", selectCurrentQuote);
 els.baseUrlPreset.addEventListener("change", renderBaseUrlInput);
 els.chainId.addEventListener("change", syncSwapShellForChain);
+document.querySelector(".sidebar")?.addEventListener("input", scheduleSaveSettings);
+document.querySelector(".sidebar")?.addEventListener("change", scheduleSaveSettings);
+document.addEventListener("pointerdown", (event) => {
+  const target = event.target;
+  if (!(target instanceof Node)) return;
+  if (!els.sellPreset.contains(target) && !els.sellPresetList.contains(target))
+    closeTokenPicker("sell");
+  if (!els.buyPreset.contains(target) && !els.buyPresetList.contains(target))
+    closeTokenPicker("buy");
+});
 document.querySelectorAll<HTMLButtonElement>("[data-copy-target]").forEach((button) => {
   button.addEventListener("click", () => void copyOutput(button));
 });
@@ -873,50 +953,368 @@ function bytes32ToText(value: Hex): string {
   return String.fromCharCode(...chars);
 }
 
-function renderTokenOptions(): void {
+function visibleTokens(): TokenInfo[] {
   const selectedChainId = currentChainIdOrNull();
   // Show only tokens for the selected chain; fall back to all when the chain is
-  // unknown (e.g. a custom chain ID with no presets) so the selects stay usable.
+  // unknown (e.g. a custom chain ID with no presets) so the pickers stay usable.
   const chainTokens =
     selectedChainId == null
       ? state.tokens
       : state.tokens.filter((token) => token.chainId === selectedChainId);
-  const tokens = chainTokens.length > 0 ? chainTokens : state.tokens;
+  return chainTokens.length > 0 ? chainTokens : state.tokens;
+}
 
-  const options = tokens
-    .map(
-      (token) =>
-        `<option value="${token.address}">${token.symbol} / ${token.name} / ${shorten(
-          token.address,
-        )} / ${token.decimals} / ${token.source}</option>`,
-    )
-    .join("");
-  els.sellPreset.innerHTML = options;
-  els.buyPreset.innerHTML = options;
-
+function renderTokenOptions(): void {
+  const tokens = visibleTokens();
+  const selectedChainId = currentChainIdOrNull();
   const defaults = selectedChainId == null ? undefined : DEFAULT_PAIR_BY_CHAIN_ID[selectedChainId];
-  selectBySymbol(els.sellPreset, defaults?.sell ?? tokens[0]?.symbol);
-  selectBySymbol(els.buyPreset, defaults?.buy ?? tokens[1]?.symbol ?? tokens[0]?.symbol);
-  applyPreset("sell");
-  applyPreset("buy");
+
+  resolveTokenSide("sell", tokenForSymbol(defaults?.sell, tokens) ?? tokens[0], tokens);
+  resolveTokenSide("buy", tokenForSymbol(defaults?.buy, tokens) ?? tokens[1] ?? tokens[0], tokens);
+
+  if (tokenPicker.sell.open) renderTokenMatches("sell");
+  if (tokenPicker.buy.open) renderTokenMatches("buy");
 }
 
-function selectBySymbol(select: HTMLSelectElement, symbol: string | undefined): void {
-  if (!symbol) return;
-  const token = state.tokens.find((candidate) => candidate.symbol === symbol);
-  if (token) select.value = token.address;
+function resolveTokenSide(
+  side: TokenSide,
+  fallback: TokenInfo | undefined,
+  tokens: TokenInfo[],
+): void {
+  const address = (side === "sell" ? els.sellToken.value : els.buyToken.value).trim();
+  const match = tokenForAddress(address, tokens);
+  if (match) {
+    applyToken(side, match, !tokenPicker[side].open);
+    return;
+  }
+  if (address && state.tokens.length === 0) {
+    syncTokenPickerLabel(side);
+    return;
+  }
+  if (fallback) applyToken(side, fallback, !tokenPicker[side].open);
+  else syncTokenPickerLabel(side);
 }
 
-function applyPreset(side: "sell" | "buy"): void {
-  const select = side === "sell" ? els.sellPreset : els.buyPreset;
-  const token = state.tokens.find((candidate) => candidate.address === select.value);
-  if (!token) return;
+function tokenForAddress(address: string, tokens = visibleTokens()): TokenInfo | undefined {
+  const normalized = address.trim().toLowerCase();
+  if (!normalized) return undefined;
+  return tokens.find((token) => token.address.toLowerCase() === normalized);
+}
+
+function tokenForSymbol(
+  symbol: string | undefined,
+  tokens = visibleTokens(),
+): TokenInfo | undefined {
+  if (!symbol) return undefined;
+  return tokens.find((token) => token.symbol === symbol);
+}
+
+function applyToken(side: TokenSide, token: TokenInfo, syncInput = true): void {
   if (side === "sell") {
     els.sellToken.value = token.address;
     els.sellDecimals.value = String(token.decimals);
   } else {
     els.buyToken.value = token.address;
   }
+  if (syncInput) tokenPicker[side].input.value = tokenInputLabel(token);
+}
+
+function tokenInputLabel(token: TokenInfo): string {
+  return `${token.symbol} / ${token.name}`;
+}
+
+function tokenSearchText(token: TokenInfo): string {
+  return `${token.symbol} ${token.name} ${token.address} ${token.source} ${token.category}`;
+}
+
+function syncTokenPickerLabel(side: TokenSide): void {
+  const address = side === "sell" ? els.sellToken.value : els.buyToken.value;
+  const token = tokenForAddress(address);
+  tokenPicker[side].input.value = token ? tokenInputLabel(token) : address.trim();
+}
+
+function swapSellAndBuyTokens(): void {
+  const sellAddress = els.sellToken.value;
+  const buyAddress = els.buyToken.value;
+  const sellToken = tokenForAddress(buyAddress);
+  const buyToken = tokenForAddress(sellAddress);
+
+  els.sellToken.value = buyAddress;
+  els.buyToken.value = sellAddress;
+  els.sellDecimals.value = sellToken ? String(sellToken.decimals) : els.sellDecimals.value;
+  tokenPicker.sell.input.value = sellToken ? tokenInputLabel(sellToken) : buyAddress.trim();
+  tokenPicker.buy.input.value = buyToken ? tokenInputLabel(buyToken) : sellAddress.trim();
+  closeTokenPicker("sell");
+  closeTokenPicker("buy");
+  scheduleSaveSettings();
+}
+
+function bindTokenPicker(side: TokenSide): void {
+  const picker = tokenPicker[side];
+  picker.input.addEventListener("focus", () => {
+    openTokenPicker(side);
+    picker.input.select();
+  });
+  picker.input.addEventListener("input", () => {
+    openTokenPicker(side);
+    renderTokenMatches(side);
+  });
+  picker.input.addEventListener("keydown", (event) => onTokenPickerKeydown(side, event));
+}
+
+function openTokenPicker(side: TokenSide): void {
+  const other: TokenSide = side === "sell" ? "buy" : "sell";
+  closeTokenPicker(other);
+  tokenPicker[side].open = true;
+  renderTokenMatches(side);
+}
+
+function closeTokenPicker(side: TokenSide): void {
+  const picker = tokenPicker[side];
+  if (!picker.open && picker.list.classList.contains("hidden")) {
+    picker.activeIndex = -1;
+    return;
+  }
+  picker.open = false;
+  picker.activeIndex = -1;
+  picker.list.classList.add("hidden");
+  picker.list.replaceChildren();
+  syncTokenPickerLabel(side);
+}
+
+function pickerQuery(side: TokenSide): string {
+  const value = tokenPicker[side].input.value;
+  const address = side === "sell" ? els.sellToken.value : els.buyToken.value;
+  const selected = tokenForAddress(address);
+  if (selected && value === tokenInputLabel(selected)) return "";
+  return value;
+}
+
+function renderTokenMatches(side: TokenSide): void {
+  const picker = tokenPicker[side];
+  const matches = fuzzyMatchTokens(pickerQuery(side), visibleTokens());
+  picker.list.classList.toggle("hidden", !picker.open);
+  picker.list.replaceChildren();
+
+  if (matches.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "token-option-empty";
+    empty.textContent = "no matching tokens";
+    picker.list.append(empty);
+    picker.activeIndex = -1;
+    return;
+  }
+
+  if (picker.activeIndex >= matches.length) picker.activeIndex = matches.length - 1;
+
+  for (const [index, token] of matches.entries()) {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className = "token-option";
+    option.role = "option";
+    option.classList.toggle("is-active", index === picker.activeIndex);
+    const title = document.createElement("strong");
+    title.textContent = token.symbol;
+    const detail = document.createElement("small");
+    detail.textContent = `${token.name} / ${shorten(token.address)} / ${token.decimals} / ${token.source}`;
+    option.append(title, detail);
+    option.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      selectTokenMatch(side, token);
+    });
+    picker.list.append(option);
+  }
+}
+
+function onTokenPickerKeydown(side: TokenSide, event: KeyboardEvent): void {
+  const picker = tokenPicker[side];
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeTokenPicker(side);
+    picker.input.blur();
+    return;
+  }
+
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    if (!picker.open) openTokenPicker(side);
+    const count = picker.list.querySelectorAll(".token-option").length;
+    if (count === 0) return;
+    const delta = event.key === "ArrowDown" ? 1 : -1;
+    picker.activeIndex = (picker.activeIndex + delta + count) % count;
+    renderTokenMatches(side);
+    picker.list.querySelector(".token-option.is-active")?.scrollIntoView({ block: "nearest" });
+    return;
+  }
+
+  if (event.key === "Enter") {
+    const active = picker.list.querySelector<HTMLButtonElement>(".token-option.is-active");
+    if (!picker.open || !active) return;
+    event.preventDefault();
+    const matches = fuzzyMatchTokens(pickerQuery(side), visibleTokens());
+    const token = matches[picker.activeIndex];
+    if (token) selectTokenMatch(side, token);
+  }
+}
+
+function selectTokenMatch(side: TokenSide, token: TokenInfo): void {
+  applyToken(side, token);
+  closeTokenPicker(side);
+  scheduleSaveSettings();
+}
+
+function fuzzyMatchTokens(query: string, tokens: TokenInfo[]): TokenInfo[] {
+  const normalized = query.trim().toLowerCase();
+  const ranked = tokens
+    .map((token) => ({ token, score: fuzzyTokenScore(normalized, token) }))
+    .filter((entry) => entry.score > 0)
+    .sort(
+      (left, right) =>
+        right.score - left.score || left.token.symbol.localeCompare(right.token.symbol),
+    );
+  return ranked.slice(0, 40).map((entry) => entry.token);
+}
+
+function normalizeSearch(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+function fuzzyTokenScore(query: string, token: TokenInfo): number {
+  const normalizedQuery = normalizeSearch(query);
+  if (!normalizedQuery) return 1;
+  const symbol = normalizeSearch(token.symbol);
+  const name = normalizeSearch(token.name);
+  const address = token.address.toLowerCase();
+  const haystack = normalizeSearch(tokenSearchText(token));
+  query = normalizedQuery;
+
+  if (symbol === query) return 1_000;
+  if (address === query) return 980;
+  if (symbol.startsWith(query)) return 900;
+  if (name.startsWith(query)) return 820;
+  if (address.startsWith(query)) return 800;
+  if (symbol.includes(query)) return 700;
+  if (name.includes(query)) return 640;
+  if (address.includes(query)) return 600;
+  if (haystack.includes(query)) return 520;
+
+  const subsequence = subsequenceScore(query, `${symbol} ${name} ${address}`);
+  return subsequence > 0 ? 200 + subsequence : 0;
+}
+
+function subsequenceScore(query: string, text: string): number {
+  let queryIndex = 0;
+  let score = 0;
+  let lastMatch = -2;
+  for (let index = 0; index < text.length && queryIndex < query.length; index += 1) {
+    if (text[index] !== query[queryIndex]) continue;
+    score += 8;
+    if (index === lastMatch + 1) score += 6;
+    if (index === 0 || /\W/.test(text[index - 1] ?? "")) score += 5;
+    lastMatch = index;
+    queryIndex += 1;
+  }
+  return queryIndex === query.length ? score : 0;
+}
+
+function readLoadSettingsPref(): boolean {
+  return window.localStorage.getItem(LOAD_SETTINGS_PREF_KEY) === "1";
+}
+
+function writeLoadSettingsPref(enabled: boolean): void {
+  window.localStorage.setItem(LOAD_SETTINGS_PREF_KEY, enabled ? "1" : "0");
+}
+
+function collectSettings(): CachedSettings {
+  return {
+    version: 1,
+    sellToken: els.sellToken.value,
+    buyToken: els.buyToken.value,
+    sellDecimals: els.sellDecimals.value,
+    sellAmount: els.sellAmount.value,
+    baseUrlPreset: els.baseUrlPreset.value,
+    baseUrl: els.baseUrl.value,
+    apiKey: els.apiKey.value,
+    chainId: els.chainId.value,
+    taker: els.taker.value,
+    preferredVenue: els.preferredVenue.value,
+    slippageBps: els.slippageBps.value,
+    builderFeeBps: els.builderFeeBps.value,
+    intentTtlSec: els.intentTtlSec.value,
+    allowWrapped: els.allowWrapped.checked,
+    logsRpcUrl: els.logsRpcUrl.value,
+    swapShell: els.swapShell.value,
+    logsTaker: els.logsTaker.value,
+    logsFromBlock: els.logsFromBlock.value,
+    logsToBlock: els.logsToBlock.value,
+    logsTokenIn: els.logsTokenIn.value,
+    logsTokenOut: els.logsTokenOut.value,
+  };
+}
+
+function saveSettingsToCache(): void {
+  window.localStorage.setItem(SETTINGS_CACHE_KEY, JSON.stringify(collectSettings()));
+}
+
+function readCachedSettings(): CachedSettings | null {
+  const raw = window.localStorage.getItem(SETTINGS_CACHE_KEY);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<CachedSettings>;
+    if (parsed.version !== 1) return null;
+    return parsed as CachedSettings;
+  } catch {
+    return null;
+  }
+}
+
+function applyCachedSettings(report: boolean): void {
+  const cached = readCachedSettings();
+  if (!cached) {
+    if (report) setStatus("no cached settings", "error");
+    return;
+  }
+
+  applyingCachedSettings = true;
+  try {
+    els.baseUrlPreset.value = cached.baseUrlPreset;
+    els.baseUrl.value = cached.baseUrl;
+    renderBaseUrlInput();
+    els.apiKey.value = cached.apiKey;
+    els.chainId.value = cached.chainId;
+    els.taker.value = cached.taker;
+    els.preferredVenue.value = cached.preferredVenue;
+    els.slippageBps.value = cached.slippageBps;
+    els.builderFeeBps.value = cached.builderFeeBps;
+    els.intentTtlSec.value = cached.intentTtlSec;
+    els.allowWrapped.checked = cached.allowWrapped;
+    els.logsRpcUrl.value = cached.logsRpcUrl;
+    els.swapShell.value = cached.swapShell;
+    els.logsTaker.value = cached.logsTaker;
+    els.logsFromBlock.value = cached.logsFromBlock;
+    els.logsToBlock.value = cached.logsToBlock;
+    els.logsTokenIn.value = cached.logsTokenIn;
+    els.logsTokenOut.value = cached.logsTokenOut;
+    els.sellToken.value = cached.sellToken;
+    els.buyToken.value = cached.buyToken;
+    els.sellDecimals.value = cached.sellDecimals;
+    els.sellAmount.value = cached.sellAmount;
+    renderTokenOptions();
+  } finally {
+    applyingCachedSettings = false;
+  }
+  if (report) setStatus("loaded settings from browser cache");
+}
+
+function scheduleSaveSettings(): void {
+  if (applyingCachedSettings) return;
+  if (saveSettingsTimer != null) window.clearTimeout(saveSettingsTimer);
+  saveSettingsTimer = window.setTimeout(() => {
+    saveSettingsToCache();
+  }, 300);
 }
 
 function renderQuoteOptions(): void {
