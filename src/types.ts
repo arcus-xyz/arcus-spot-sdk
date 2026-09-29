@@ -325,6 +325,8 @@ export type ArcusFirmQuote = {
   arcus: {
     minAmountOut: string;
   };
+  /** True when the taker needs a one-time sellToken→Permit2 approval (build a permit). */
+  needsAllowance?: boolean;
 };
 
 export type RialtoTx = {
