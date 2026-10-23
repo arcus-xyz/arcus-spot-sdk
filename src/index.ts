@@ -33,7 +33,12 @@ export {
   signTypedDataWithViem,
   splitSignature,
 } from "./signing.js";
-export { decodeSwapExecutedLogs, getSwapShellTradeHistory, swapShellAbi } from "./shell.js";
+export {
+  decodeSwapExecutedLogs,
+  getSwapShellTradeHistory,
+  swapShellAbi,
+  swapShellLegacyAbi,
+} from "./shell.js";
 export { getZeroxSigningTasks } from "./venues/zerox.js";
 export {
   BEACON_PROXY_CREATION_CODE,

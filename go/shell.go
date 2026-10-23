@@ -11,8 +11,33 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
-// swapShellABIJSON declares SwapShell's SwapExecuted event.
+// swapShellABIJSON declares SwapShell's SwapExecuted event as emitted by the
+// current Robinhood mainnet and testnet implementations, which carry the
+// caller's public API-key id.
 const swapShellABIJSON = `[
+  {"type":"event","name":"SwapExecuted","inputs":[
+    {"name":"taker","type":"address","indexed":true},
+    {"name":"tokenIn","type":"address","indexed":true},
+    {"name":"tokenOut","type":"address","indexed":true},
+    {"name":"minAmountOut","type":"uint256","indexed":false},
+    {"name":"amountIn","type":"uint256","indexed":false},
+    {"name":"quotedAmountIn","type":"uint256","indexed":false},
+    {"name":"quotedAmountOut","type":"uint256","indexed":false},
+    {"name":"amountOut","type":"uint256","indexed":false},
+    {"name":"tokenInBenchmarkPrice","type":"uint256","indexed":false},
+    {"name":"tokenOutBenchmarkPrice","type":"uint256","indexed":false},
+    {"name":"router","type":"address","indexed":false},
+    {"name":"routeTag","type":"bytes32","indexed":false},
+    {"name":"apiKeyId","type":"string","indexed":false},
+    {"name":"success","type":"bool","indexed":false},
+    {"name":"reason","type":"string","indexed":false}
+  ]}
+]`
+
+// swapShellLegacyABIJSON declares the earlier SwapExecuted shape without
+// apiKeyId: logs from SwapShell implementations before that field was added
+// (and the Arbitrum deployment).
+const swapShellLegacyABIJSON = `[
   {"type":"event","name":"SwapExecuted","inputs":[
     {"name":"taker","type":"address","indexed":true},
     {"name":"tokenIn","type":"address","indexed":true},
@@ -31,11 +56,17 @@ const swapShellABIJSON = `[
   ]}
 ]`
 
-// SwapShellABI is the parsed SwapShell event ABI.
+// SwapShellABI is the parsed SwapShell event ABI (current event shape).
 var SwapShellABI = mustParseABI(swapShellABIJSON)
 
-// SwapExecutedEventID is the topic0 of SwapShell's SwapExecuted event.
+// SwapShellLegacyABI is the parsed legacy SwapExecuted event ABI.
+var SwapShellLegacyABI = mustParseABI(swapShellLegacyABIJSON)
+
+// SwapExecutedEventID is the topic0 of SwapShell's current SwapExecuted event.
 var SwapExecutedEventID = SwapShellABI.Events["SwapExecuted"].ID
+
+// SwapExecutedLegacyEventID is the topic0 of the legacy SwapExecuted event.
+var SwapExecutedLegacyEventID = SwapShellLegacyABI.Events["SwapExecuted"].ID
 
 // SwapExecutedArgs are the decoded SwapExecuted event arguments.
 type SwapExecutedArgs struct {
@@ -51,8 +82,10 @@ type SwapExecutedArgs struct {
 	TokenOutBenchmarkPrice *big.Int
 	Router                 common.Address
 	RouteTag               common.Hash
-	Success                bool
-	Reason                 string
+	// APIKeyID is the public API-key id; empty on legacy-shape logs.
+	APIKeyID string
+	Success  bool
+	Reason   string
 }
 
 // DecodedSwapExecutedLog pairs a raw log with its decoded SwapExecuted args.
@@ -77,15 +110,36 @@ func DecodeSwapExecutedLogs(logs []types.Log) []DecodedSwapExecutedLog {
 }
 
 func decodeSwapExecutedLog(log types.Log) (*SwapExecutedArgs, error) {
-	if len(log.Topics) != 4 || log.Topics[0] != SwapExecutedEventID {
+	if len(log.Topics) != 4 {
 		return nil, errors.New("not a SwapExecuted log")
 	}
-	values, err := SwapShellABI.Events["SwapExecuted"].Inputs.NonIndexed().Unpack(log.Data)
-	if err != nil {
-		return nil, err
-	}
-	if len(values) != 11 {
-		return nil, fmt.Errorf("unexpected SwapExecuted data arity %d", len(values))
+	var (
+		values   []any
+		err      error
+		apiKeyID string
+	)
+	switch log.Topics[0] {
+	case SwapExecutedEventID:
+		values, err = SwapShellABI.Events["SwapExecuted"].Inputs.NonIndexed().Unpack(log.Data)
+		if err != nil {
+			return nil, err
+		}
+		if len(values) != 12 {
+			return nil, fmt.Errorf("unexpected SwapExecuted data arity %d", len(values))
+		}
+		apiKeyID = values[9].(string)
+		// Drop apiKeyId so the remaining fields line up with the legacy layout.
+		values = append(values[:9:9], values[10:]...)
+	case SwapExecutedLegacyEventID:
+		values, err = SwapShellLegacyABI.Events["SwapExecuted"].Inputs.NonIndexed().Unpack(log.Data)
+		if err != nil {
+			return nil, err
+		}
+		if len(values) != 11 {
+			return nil, fmt.Errorf("unexpected SwapExecuted data arity %d", len(values))
+		}
+	default:
+		return nil, errors.New("not a SwapExecuted log")
 	}
 	routeTag, ok := values[8].([32]byte)
 	if !ok {
@@ -104,6 +158,7 @@ func decodeSwapExecutedLog(log types.Log) (*SwapExecutedArgs, error) {
 		TokenOutBenchmarkPrice: values[6].(*big.Int),
 		Router:                 values[7].(common.Address),
 		RouteTag:               common.Hash(routeTag),
+		APIKeyID:               apiKeyID,
 		Success:                values[9].(bool),
 		Reason:                 values[10].(string),
 	}, nil
@@ -152,7 +207,8 @@ func GetSwapShellTradeHistory(ctx context.Context, request SwapShellTradeHistory
 	}
 
 	topics := [][]common.Hash{
-		{SwapExecutedEventID},
+		// Match both event shapes; the indexed topics are identical in both.
+		{SwapExecutedEventID, SwapExecutedLegacyEventID},
 		{addressTopic(request.Taker)},
 	}
 	if request.TokenIn != nil || request.TokenOut != nil {

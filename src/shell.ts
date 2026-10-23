@@ -1,7 +1,49 @@
-import { decodeEventLog, type Address, type Hex, type Log, type PublicClient } from "viem";
+import {
+  decodeEventLog,
+  encodeEventTopics,
+  formatLog,
+  numberToHex,
+  toEventSelector,
+  type Address,
+  type Hex,
+  type Log,
+  type PublicClient,
+} from "viem";
 import { getSwapShellAddress } from "./constants.js";
 
+/**
+ * SwapShell's `SwapExecuted` event as emitted by the current Robinhood mainnet and
+ * testnet implementations, which carry the caller's public API-key id.
+ */
 export const swapShellAbi = [
+  {
+    type: "event",
+    name: "SwapExecuted",
+    inputs: [
+      { name: "taker", type: "address", indexed: true },
+      { name: "tokenIn", type: "address", indexed: true },
+      { name: "tokenOut", type: "address", indexed: true },
+      { name: "minAmountOut", type: "uint256", indexed: false },
+      { name: "amountIn", type: "uint256", indexed: false },
+      { name: "quotedAmountIn", type: "uint256", indexed: false },
+      { name: "quotedAmountOut", type: "uint256", indexed: false },
+      { name: "amountOut", type: "uint256", indexed: false },
+      { name: "tokenInBenchmarkPrice", type: "uint256", indexed: false },
+      { name: "tokenOutBenchmarkPrice", type: "uint256", indexed: false },
+      { name: "router", type: "address", indexed: false },
+      { name: "routeTag", type: "bytes32", indexed: false },
+      { name: "apiKeyId", type: "string", indexed: false },
+      { name: "success", type: "bool", indexed: false },
+      { name: "reason", type: "string", indexed: false },
+    ],
+  },
+] as const;
+
+/**
+ * The earlier `SwapExecuted` shape without `apiKeyId`: logs from SwapShell
+ * implementations before that field was added (and the Arbitrum deployment).
+ */
+export const swapShellLegacyAbi = [
   {
     type: "event",
     name: "SwapExecuted",
@@ -24,6 +66,8 @@ export const swapShellAbi = [
   },
 ] as const;
 
+const swapExecutedAbis = [...swapShellAbi, ...swapShellLegacyAbi] as const;
+
 export type SwapExecutedArgs = {
   taker: Address;
   tokenIn: Address;
@@ -37,6 +81,8 @@ export type SwapExecutedArgs = {
   tokenOutBenchmarkPrice: bigint;
   router: Address;
   routeTag: Hex;
+  /** Public API-key id; undefined on logs in the legacy event shape. */
+  apiKeyId?: string;
   success: boolean;
   reason: string;
 };
@@ -100,15 +146,28 @@ export async function getSwapShellTradeHistory({
     throw new Error("SwapShell address is required for this chain");
   }
 
-  const logs = await publicClient.getLogs({
-    address: resolvedSwapShell,
-    event: swapShellAbi[0],
+  // One eth_getLogs call matching both event shapes (topic0 OR-list); the indexed
+  // taker/tokenIn/tokenOut topics are identical in both.
+  const [currentTopic0, ...indexedTopics] = encodeEventTopics({
+    abi: swapShellAbi,
+    eventName: "SwapExecuted",
     args: { taker, tokenIn, tokenOut },
-    fromBlock,
-    toBlock,
+  });
+  const legacyTopic0 = toEventSelector(swapShellLegacyAbi[0]);
+
+  const logs = await publicClient.request({
+    method: "eth_getLogs",
+    params: [
+      {
+        address: resolvedSwapShell,
+        topics: [[currentTopic0 as Hex, legacyTopic0], ...indexedTopics],
+        fromBlock: numberToHex(fromBlock),
+        toBlock: typeof toBlock === "bigint" ? numberToHex(toBlock) : toBlock,
+      },
+    ],
   });
 
-  return decodeSwapExecutedLogs(logs as readonly Log[]);
+  return decodeSwapExecutedLogs(logs.map((log) => formatLog(log)) as readonly Log[]);
 }
 
 export function decodeSwapExecutedLogs(logs: readonly Log[]): DecodedSwapExecutedLog[] {
@@ -116,7 +175,7 @@ export function decodeSwapExecutedLogs(logs: readonly Log[]): DecodedSwapExecute
   for (const log of logs) {
     try {
       const event = decodeEventLog({
-        abi: swapShellAbi,
+        abi: swapExecutedAbis,
         data: log.data,
         topics: log.topics,
       });
