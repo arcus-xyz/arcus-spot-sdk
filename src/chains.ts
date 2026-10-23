@@ -50,7 +50,7 @@ export const ROBINHOOD_MAINNET_DEPLOYMENTS = {
   arcusWrappedExecutor: "0x43cF43056C33128329B54F66CA3649CF2975f1A6",
   arcusWrappedTokenFactory: "0x8bc71aE8EaC8B25F30c2990930Cc3A80E72e169e",
   arcusWrappedTokenBeacon: "0x27fEB332759F8d2f351D7fC72D29af37664ffd77",
-  rialtoRouter: "0xC94135b63772b91D79d0A2DaAb2a8801f32359bD",
+  rialtoRouter: "0xb63cEcf4Aa3F0E31bD58496b2487e9CE3521b8b3",
   lifiPermit2Proxy: "0x8eABB4E117fB70b346592e013855f6d825F50af1",
 } as const satisfies ChainDeployments;
 
