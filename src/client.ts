@@ -169,6 +169,7 @@ export class SpotRouterClient {
     const requestUrl = url.toString();
 
     let response: Response;
+    let text: string;
     try {
       response = await this.fetchFn(url, {
         ...init,
@@ -178,6 +179,7 @@ export class SpotRouterClient {
         },
         signal: controller.signal,
       });
+      text = await response.text();
     } catch (error) {
       const aborted =
         controller.signal.aborted || (error instanceof Error && error.name === "AbortError");
@@ -198,7 +200,6 @@ export class SpotRouterClient {
       clearTimeout(timer);
     }
 
-    const text = await response.text();
     const body = text ? parseJson(text) : null;
 
     if (!response.ok) {

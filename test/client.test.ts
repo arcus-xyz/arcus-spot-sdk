@@ -62,6 +62,85 @@ describe("SpotRouterClient request errors", () => {
     expect(error.timeoutMs).toBe(5);
   });
 
+  test("keeps the timeout active while reading the response body", async () => {
+    const cause = new DOMException("The operation was aborted", "AbortError");
+    let signal: AbortSignal | null | undefined;
+    const client = new SpotRouterClient({
+      baseUrl: "https://router.example",
+      timeoutMs: 5,
+      fetch: async (_input, init) => {
+        signal = init?.signal;
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              const release = setTimeout(() => {
+                controller.enqueue(new TextEncoder().encode('{"ok":true,"chainId":4663}'));
+                controller.close();
+              }, 100);
+              signal?.addEventListener(
+                "abort",
+                () => {
+                  clearTimeout(release);
+                  controller.error(cause);
+                },
+                { once: true },
+              );
+            },
+          }),
+        );
+      },
+    });
+
+    let caught: unknown;
+    try {
+      await client.health();
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(SpotRouterError);
+    const error = caught as SpotRouterError;
+    expect(error.message).toContain("timed out after 5ms");
+    expect(error.method).toBe("GET");
+    expect(error.url).toBe("https://router.example/health");
+    expect(error.timeoutMs).toBe(5);
+    expect(error.cause).toBe(cause);
+    expect(signal?.aborted).toBe(true);
+  });
+
+  test("includes request details and cause when reading the body fails", async () => {
+    const cause = new TypeError("connection closed while reading response");
+    const client = new SpotRouterClient({
+      baseUrl: "https://router.example",
+      timeoutMs: 12_000,
+      fetch: async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(cause);
+            },
+          }),
+        ),
+    });
+
+    let caught: unknown;
+    try {
+      await client.health();
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(SpotRouterError);
+    const error = caught as SpotRouterError;
+    expect(error.message).toBe(
+      "Router request failed: connection closed while reading response (GET https://router.example/health)",
+    );
+    expect(error.method).toBe("GET");
+    expect(error.url).toBe("https://router.example/health");
+    expect(error.timeoutMs).toBe(12_000);
+    expect(error.cause).toBe(cause);
+  });
+
   test("toJSON returns the full structured error", async () => {
     const cause = new TypeError("Failed to fetch");
     const client = new SpotRouterClient({
